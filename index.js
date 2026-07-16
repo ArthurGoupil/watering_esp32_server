@@ -70,6 +70,12 @@ const server = http.createServer((req, res) => {
     const raw = url.searchParams.get("tank_level");
     const tankLevel = raw === null ? null : Number(raw);
 
+    // Distance brute (cm) mesuree par l'ESP32, transmise a titre de
+    // diagnostic (optionnelle : absente si l'ESP32 n'envoie pas ce param).
+    const rawDistanceParam = url.searchParams.get("raw_distance_cm");
+    const rawDistanceCm =
+      rawDistanceParam === null ? null : Number(rawDistanceParam);
+
     if (raw === null || Number.isNaN(tankLevel)) {
       log(`/water APPEL INVALIDE (tank_level manquant ou non numerique: "${raw}")`);
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -77,10 +83,13 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    const distanceInfo =
+      rawDistanceCm === null ? "" : ` (distance brute = ${rawDistanceCm} cm)`;
+
     if (tankLevel < 0) {
-      log(`/water  -> CAPTEUR EN PANNE (tank_level=${tankLevel})`);
+      log(`/water  -> CAPTEUR EN PANNE (tank_level=${tankLevel})${distanceInfo}`);
     } else {
-      log(`/water  -> niveau cuve = ${tankLevel} %`);
+      log(`/water  -> niveau cuve = ${tankLevel} %${distanceInfo}`);
     }
 
     // Reponse actuelle : simple accuse de reception.
@@ -89,6 +98,7 @@ const server = http.createServer((req, res) => {
     const body = {
       ok: true,
       received_tank_level: tankLevel,
+      received_raw_distance_cm: rawDistanceCm,
       // watering_seconds: wateringSeconds,  // <- a activer plus tard
     };
 
