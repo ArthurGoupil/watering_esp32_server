@@ -45,6 +45,14 @@ function computeWateringSeconds(tankLevel) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  // Route de sante : utilisee par un cronjob externe pour empecher le dyno
+  // Heroku de s'endormir (et pour verifier rapidement que le serveur tourne).
+  if (req.method === "GET" && url.pathname === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", uptime_seconds: process.uptime() }));
+    return;
+  }
+
   // Page d'accueil : utile pour verifier vite fait dans un navigateur que le
   // serveur (et le tunnel) repondent bien.
   if (req.method === "GET" && url.pathname === "/") {
