@@ -42,6 +42,11 @@ function computeWateringSeconds(tankLevel) {
   return 30; // valeur d'exemple
 }
 
+// Valeur FIXE utilisee pour le test actuel : le serveur renvoie toujours
+// 8 secondes d'arrosage, quel que soit le niveau de la cuve. A remplacer par
+// computeWateringSeconds(tankLevel) quand la vraie logique sera prete.
+const TEST_WATERING_SECONDS = 8;
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -91,15 +96,17 @@ const server = http.createServer((req, res) => {
     } else {
       log(`/water  -> niveau cuve = ${tankLevel} %${distanceInfo}`);
     }
+    log(`/water  -> duree d'arrosage renvoyee = ${TEST_WATERING_SECONDS}s (valeur de test fixe)`);
 
-    // Reponse actuelle : simple accuse de reception.
-    // Plus tard, tu pourras renvoyer une duree d'arrosage :
+    // Reponse actuelle : renvoie une duree d'arrosage fixe de test
+    // (TEST_WATERING_SECONDS). Plus tard, on utilisera la vraie logique :
     //   const wateringSeconds = computeWateringSeconds(tankLevel);
+    const wateringSeconds = TEST_WATERING_SECONDS;
     const body = {
       ok: true,
       received_tank_level: tankLevel,
       received_raw_distance_cm: rawDistanceCm,
-      // watering_seconds: wateringSeconds,  // <- a activer plus tard
+      watering_seconds: wateringSeconds,
     };
 
     res.writeHead(200, { "Content-Type": "application/json" });
