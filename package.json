@@ -1,0 +1,10 @@
+{
+  "name": "arrosage-server-test",
+  "version": "1.0.0",
+  "description": "Serveur de test pour le systeme d'arrosage ESP32 (log des appels /water)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "license": "MIT"
+}
