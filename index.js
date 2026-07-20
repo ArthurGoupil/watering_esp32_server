@@ -43,9 +43,10 @@ function computeWateringSeconds(tankLevel) {
 }
 
 // Valeur FIXE utilisee pour le test actuel : le serveur renvoie toujours
-// 8 secondes d'arrosage, quel que soit le niveau de la cuve. A remplacer par
-// computeWateringSeconds(tankLevel) quand la vraie logique sera prete.
-const TEST_WATERING_SECONDS = 8;
+// 0 seconde d'arrosage (pompe pas encore branchee a la cuve), quel que soit
+// le niveau de la cuve. A remplacer par computeWateringSeconds(tankLevel)
+// quand la vraie logique sera prete.
+const TEST_WATERING_SECONDS = 0;
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -81,6 +82,18 @@ const server = http.createServer((req, res) => {
     const rawDistanceCm =
       rawDistanceParam === null ? null : Number(rawDistanceParam);
 
+    // Diagnostics supplementaires sur la fiabilite de la mesure capteur :
+    // nombre d'echantillons bruts valides sur le dernier lot, et nombre de
+    // tentatives (lots de mesures) qu'il a fallu avant d'obtenir un resultat
+    // (ou d'abandonner). Optionnels pour rester compatible avec un firmware
+    // plus ancien qui ne les enverrait pas.
+    const validSamplesParam = url.searchParams.get("valid_samples");
+    const validSamples =
+      validSamplesParam === null ? null : Number(validSamplesParam);
+    const readAttemptsParam = url.searchParams.get("read_attempts");
+    const readAttempts =
+      readAttemptsParam === null ? null : Number(readAttemptsParam);
+
     if (raw === null || Number.isNaN(tankLevel)) {
       log(`/water APPEL INVALIDE (tank_level manquant ou non numerique: "${raw}")`);
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -90,11 +103,15 @@ const server = http.createServer((req, res) => {
 
     const distanceInfo =
       rawDistanceCm === null ? "" : ` (distance brute = ${rawDistanceCm} cm)`;
+    const diagnosticInfo =
+      validSamples === null && readAttempts === null
+        ? ""
+        : ` [echantillons valides = ${validSamples}, tentatives = ${readAttempts}]`;
 
     if (tankLevel < 0) {
-      log(`/water  -> CAPTEUR EN PANNE (tank_level=${tankLevel})${distanceInfo}`);
+      log(`/water  -> CAPTEUR EN PANNE (tank_level=${tankLevel})${distanceInfo}${diagnosticInfo}`);
     } else {
-      log(`/water  -> niveau cuve = ${tankLevel} %${distanceInfo}`);
+      log(`/water  -> niveau cuve = ${tankLevel} %${distanceInfo}${diagnosticInfo}`);
     }
     log(`/water  -> duree d'arrosage renvoyee = ${TEST_WATERING_SECONDS}s (valeur de test fixe)`);
 
@@ -106,6 +123,8 @@ const server = http.createServer((req, res) => {
       ok: true,
       received_tank_level: tankLevel,
       received_raw_distance_cm: rawDistanceCm,
+      received_valid_samples: validSamples,
+      received_read_attempts: readAttempts,
       watering_seconds: wateringSeconds,
     };
 
