@@ -46,7 +46,7 @@ function computeWateringSeconds(tankLevel) {
 // 0 seconde d'arrosage (pompe pas encore branchee a la cuve), quel que soit
 // le niveau de la cuve. A remplacer par computeWateringSeconds(tankLevel)
 // quand la vraie logique sera prete.
-const TEST_WATERING_SECONDS = 30;
+const TEST_WATERING_SECONDS = 300;
 
 const server = http.createServer((req, res) => {
 	const url = new URL(req.url, `http://${req.headers.host}`);
