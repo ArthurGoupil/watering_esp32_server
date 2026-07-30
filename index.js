@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- *  Serveur de test - Arrosage automatique
+ *  Serveur d'arrosage automatique
  * ============================================================================
  *
  *  Petit serveur HTTP (sans dependance, module "http" natif de Node) qui :
@@ -9,11 +9,9 @@
  *    - log chaque appel dans la console avec l'heure et le niveau recu
  *    - renvoie une reponse JSON
  *
- *  Objectif actuel : verifier que l'ESP32 communique bien.
- *
- *  Plus tard : l'endpoint renverra une DUREE d'arrosage (en secondes) que
- *  l'ESP32 devra respecter. Un exemple de logique est deja prepare plus bas
- *  (voir computeWateringSeconds) mais reste desactive pour l'instant.
+ *  L'endpoint renvoie une DUREE d'arrosage en secondes que l'ESP32 respecte.
+ *  La version actuelle renvoie 15 minutes. Une logique basee sur le niveau de
+ *  la cuve est preparee plus bas pour une future evolution.
  *
  *  Lancer :   node server/index.js
  *  ou :       npm start   (depuis le dossier server/)
@@ -42,11 +40,10 @@ function computeWateringSeconds(tankLevel) {
 	return 30; // valeur d'exemple
 }
 
-// Valeur FIXE utilisee pour le test actuel : le serveur renvoie toujours
-// 0 seconde d'arrosage (pompe pas encore branchee a la cuve), quel que soit
-// le niveau de la cuve. A remplacer par computeWateringSeconds(tankLevel)
-// quand la vraie logique sera prete.
-const TEST_WATERING_SECONDS = 300;
+// Duree d'arrosage fixe de la version actuelle : 15 minutes.
+// A remplacer par computeWateringSeconds(tankLevel) quand la logique basee
+// sur le niveau de la cuve sera prete.
+const WATERING_SECONDS = 900;
 
 const server = http.createServer((req, res) => {
 	const url = new URL(req.url, `http://${req.headers.host}`);
@@ -120,13 +117,13 @@ const server = http.createServer((req, res) => {
 			);
 		}
 		log(
-			`/water  -> duree d'arrosage renvoyee = ${TEST_WATERING_SECONDS}s (valeur de test fixe)`,
+			`/water  -> duree d'arrosage renvoyee = ${WATERING_SECONDS}s (15 minutes)`,
 		);
 
 		// Reponse actuelle : renvoie une duree d'arrosage fixe de test
-		// (TEST_WATERING_SECONDS). Plus tard, on utilisera la vraie logique :
+		// (WATERING_SECONDS). Plus tard, on utilisera la vraie logique :
 		//   const wateringSeconds = computeWateringSeconds(tankLevel);
-		const wateringSeconds = TEST_WATERING_SECONDS;
+		const wateringSeconds = WATERING_SECONDS;
 		const body = {
 			ok: true,
 			received_tank_level: tankLevel,
