@@ -43,7 +43,7 @@ function computeWateringSeconds(tankLevel) {
 // Duree d'arrosage fixe de la version actuelle : 15 minutes.
 // A remplacer par computeWateringSeconds(tankLevel) quand la logique basee
 // sur le niveau de la cuve sera prete.
-const WATERING_SECONDS = 900;
+const WATERING_SECONDS = 500;
 
 const server = http.createServer((req, res) => {
 	const url = new URL(req.url, `http://${req.headers.host}`);
