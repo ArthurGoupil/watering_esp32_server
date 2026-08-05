@@ -95,6 +95,24 @@ const server = http.createServer((req, res) => {
 		const readAttemptsParam = url.searchParams.get("read_attempts");
 		const readAttempts =
 			readAttemptsParam === null ? null : Number(readAttemptsParam);
+		const attemptedSamplesParam = url.searchParams.get("attempted_samples");
+		const attemptedSamples =
+			attemptedSamplesParam === null ? null : Number(attemptedSamplesParam);
+		const timeoutSamplesParam = url.searchParams.get("timeout_samples");
+		const timeoutSamples =
+			timeoutSamplesParam === null ? null : Number(timeoutSamplesParam);
+		const outOfRangeSamplesParam = url.searchParams.get(
+			"out_of_range_samples",
+		);
+		const outOfRangeSamples =
+			outOfRangeSamplesParam === null ? null : Number(outOfRangeSamplesParam);
+		const echoIdleHighSamplesParam = url.searchParams.get(
+			"echo_idle_high_samples",
+		);
+		const echoIdleHighSamples =
+			echoIdleHighSamplesParam === null
+				? null
+				: Number(echoIdleHighSamplesParam);
 
 		if (raw === null || Number.isNaN(tankLevel)) {
 			log(
@@ -111,14 +129,35 @@ const server = http.createServer((req, res) => {
 			validSamples === null && readAttempts === null
 				? ""
 				: ` [echantillons valides = ${validSamples}, tentatives = ${readAttempts}]`;
+		const detailedDiagnosticInfo =
+			attemptedSamples === null
+				? ""
+				: ` [total = ${attemptedSamples}, sans echo = ${timeoutSamples}, hors plage = ${outOfRangeSamples}, ECHO haut au repos = ${echoIdleHighSamples}]`;
 
 		if (tankLevel < 0) {
 			log(
-				`${endpoint}  -> CAPTEUR EN PANNE (tank_level=${tankLevel})${distanceInfo}${diagnosticInfo}`,
+				`${endpoint}  -> CAPTEUR EN PANNE (tank_level=${tankLevel})${distanceInfo}${diagnosticInfo}${detailedDiagnosticInfo}`,
 			);
 		} else {
 			log(
-				`${endpoint}  -> niveau cuve = ${tankLevel} %${distanceInfo}${diagnosticInfo}`,
+				`${endpoint}  -> niveau cuve = ${tankLevel} %${distanceInfo}${diagnosticInfo}${detailedDiagnosticInfo}`,
+			);
+		}
+
+		if (echoIdleHighSamples > 0) {
+			log(
+				`${endpoint}  -> diagnostic probable : ligne ECHO anormalement HIGH au repos (cablage, level shifter ou capteur)`,
+			);
+		} else if (
+			attemptedSamples > 0 &&
+			timeoutSamples === attemptedSamples
+		) {
+			log(
+				`${endpoint}  -> diagnostic : aucun echo recu (alimentation/cablage OU cible/positionnement, impossible a distinguer logiciellement)`,
+			);
+		} else if (outOfRangeSamples > 0) {
+			log(
+				`${endpoint}  -> diagnostic probable : echoes recus mais hors plage (positionnement, reflexions ou cible)`,
 			);
 		}
 
@@ -142,6 +181,10 @@ const server = http.createServer((req, res) => {
 			received_raw_distance_cm: rawDistanceCm,
 			received_valid_samples: validSamples,
 			received_read_attempts: readAttempts,
+			received_attempted_samples: attemptedSamples,
+			received_timeout_samples: timeoutSamples,
+			received_out_of_range_samples: outOfRangeSamples,
+			received_echo_idle_high_samples: echoIdleHighSamples,
 			watering_seconds: wateringSeconds,
 		};
 
