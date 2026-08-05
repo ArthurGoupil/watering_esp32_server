@@ -68,8 +68,13 @@ const server = http.createServer((req, res) => {
 		return;
 	}
 
-	// On ne gere que GET /water
-	if (req.method === "GET" && url.pathname === "/water") {
+	// /init et /water recoivent exactement les memes mesures. /init sert
+	// uniquement au diagnostic de demarrage et ne renvoie aucun contenu.
+	if (
+		req.method === "GET" &&
+		(url.pathname === "/init" || url.pathname === "/water")
+	) {
+		const endpoint = url.pathname;
 		const raw = url.searchParams.get("tank_level");
 		const tankLevel = raw === null ? null : Number(raw);
 
@@ -93,7 +98,7 @@ const server = http.createServer((req, res) => {
 
 		if (raw === null || Number.isNaN(tankLevel)) {
 			log(
-				`/water APPEL INVALIDE (tank_level manquant ou non numerique: "${raw}")`,
+				`${endpoint} APPEL INVALIDE (tank_level manquant ou non numerique: "${raw}")`,
 			);
 			res.writeHead(400, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ error: "tank_level manquant ou invalide" }));
@@ -109,15 +114,22 @@ const server = http.createServer((req, res) => {
 
 		if (tankLevel < 0) {
 			log(
-				`/water  -> CAPTEUR EN PANNE (tank_level=${tankLevel})${distanceInfo}${diagnosticInfo}`,
+				`${endpoint}  -> CAPTEUR EN PANNE (tank_level=${tankLevel})${distanceInfo}${diagnosticInfo}`,
 			);
 		} else {
 			log(
-				`/water  -> niveau cuve = ${tankLevel} %${distanceInfo}${diagnosticInfo}`,
+				`${endpoint}  -> niveau cuve = ${tankLevel} %${distanceInfo}${diagnosticInfo}`,
 			);
 		}
+
+		if (endpoint === "/init") {
+			res.writeHead(204);
+			res.end();
+			return;
+		}
+
 		log(
-			`/water  -> duree d'arrosage renvoyee = ${WATERING_SECONDS}s (15 minutes)`,
+			`/water  -> duree d'arrosage renvoyee = ${WATERING_SECONDS}s`,
 		);
 
 		// Reponse actuelle : renvoie une duree d'arrosage fixe de test
@@ -146,5 +158,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
 	log(`Serveur de test demarre sur http://0.0.0.0:${PORT}`);
-	log(`En attente des appels : GET /water?tank_level=XX`);
+	log(`En attente des appels : GET /init ou /water?tank_level=XX`);
 });
