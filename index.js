@@ -40,10 +40,11 @@ function computeWateringSeconds(tankLevel) {
 	return 30; // valeur d'exemple
 }
 
+// Arrosage actuel = 1,54cl/s, soit 92,4cl/minute.
 // Duree d'arrosage fixe de la version actuelle : 15 minutes.
 // A remplacer par computeWateringSeconds(tankLevel) quand la logique basee
 // sur le niveau de la cuve sera prete.
-const WATERING_SECONDS = 500;
+const WATERING_SECONDS = 800;
 
 const server = http.createServer((req, res) => {
 	const url = new URL(req.url, `http://${req.headers.host}`);
@@ -101,9 +102,7 @@ const server = http.createServer((req, res) => {
 		const timeoutSamplesParam = url.searchParams.get("timeout_samples");
 		const timeoutSamples =
 			timeoutSamplesParam === null ? null : Number(timeoutSamplesParam);
-		const outOfRangeSamplesParam = url.searchParams.get(
-			"out_of_range_samples",
-		);
+		const outOfRangeSamplesParam = url.searchParams.get("out_of_range_samples");
 		const outOfRangeSamples =
 			outOfRangeSamplesParam === null ? null : Number(outOfRangeSamplesParam);
 		const echoIdleHighSamplesParam = url.searchParams.get(
@@ -148,10 +147,7 @@ const server = http.createServer((req, res) => {
 			log(
 				`${endpoint}  -> diagnostic probable : ligne ECHO anormalement HIGH au repos (cablage, level shifter ou capteur)`,
 			);
-		} else if (
-			attemptedSamples > 0 &&
-			timeoutSamples === attemptedSamples
-		) {
+		} else if (attemptedSamples > 0 && timeoutSamples === attemptedSamples) {
 			log(
 				`${endpoint}  -> diagnostic : aucun echo recu (alimentation/cablage OU cible/positionnement, impossible a distinguer logiciellement)`,
 			);
@@ -167,9 +163,7 @@ const server = http.createServer((req, res) => {
 			return;
 		}
 
-		log(
-			`/water  -> duree d'arrosage renvoyee = ${WATERING_SECONDS}s`,
-		);
+		log(`/water  -> duree d'arrosage renvoyee = ${WATERING_SECONDS}s`);
 
 		// Reponse actuelle : renvoie une duree d'arrosage fixe de test
 		// (WATERING_SECONDS). Plus tard, on utilisera la vraie logique :
