@@ -5,11 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "build:app": "cd app && npm install && npm run build",
+    "build:app": "cd app && npm install --include=dev && npm run build",
     "heroku-postbuild": "npm run build:app"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   },
   "dependencies": {
     "express": "^4.21.2",
