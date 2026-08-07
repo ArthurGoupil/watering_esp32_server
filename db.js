@@ -292,11 +292,20 @@ async function listWaterings(limit = 30) {
 	return rows;
 }
 
+// Supprime un arrosage ET sa mesure associee : la jauge de la cuve (basee sur
+// la derniere mesure) retombe ainsi sur la mesure precedente.
 async function deleteWatering(id) {
-	const { rowCount } = await pool.query("DELETE FROM waterings WHERE id = $1", [
-		id,
-	]);
-	return rowCount > 0;
+	const { rows } = await pool.query(
+		"DELETE FROM waterings WHERE id = $1 RETURNING measurement_id",
+		[id],
+	);
+	if (rows.length === 0) return false;
+	if (rows[0].measurement_id !== null) {
+		await pool.query("DELETE FROM measurements WHERE id = $1", [
+			rows[0].measurement_id,
+		]);
+	}
+	return true;
 }
 
 async function listMeasurements(limit = 50) {
