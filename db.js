@@ -223,12 +223,15 @@ async function insertMeasurement(endpoint, m) {
 	return rows[0].id;
 }
 
-// Derniere mesure prise en compte par l'app : uniquement celles du cycle
-// d'arrosage (/water). Les mesures /init (diagnostics de redemarrage) sont
-// stockees mais ignorees par la jauge.
+// Derniere mesure prise en compte par l'app : la plus recente encore liee a
+// une entree d'historique d'arrosage. La jauge est ainsi toujours coherente
+// avec l'historique (suppression comprise), et les mesures /init ou
+// orphelines sont ignorees.
 async function latestMeasurement() {
 	const { rows } = await pool.query(
-		"SELECT * FROM measurements WHERE endpoint = '/water' ORDER BY created_at DESC LIMIT 1",
+		`SELECT m.* FROM measurements m
+		 JOIN waterings w ON w.measurement_id = m.id
+		 ORDER BY m.created_at DESC LIMIT 1`,
 	);
 	return rows[0] ?? null;
 }
