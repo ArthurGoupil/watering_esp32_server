@@ -1,10 +1,19 @@
 {
-  "name": "arrosage-server-test",
-  "version": "1.0.0",
-  "description": "Serveur de test pour le systeme d'arrosage ESP32 (log des appels /water)",
+  "name": "arrosage-server",
+  "version": "2.0.0",
+  "description": "Serveur du systeme d'arrosage ESP32 : endpoints ESP32, API + app mobile (PWA), persistence PostgreSQL",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "build:app": "cd app && npm install && npm run build",
+    "heroku-postbuild": "npm run build:app"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
   },
   "license": "MIT"
 }

@@ -1,0 +1,263 @@
+:root {
+	color-scheme: dark;
+	--bg: #0f172a;
+	--card: #1e293b;
+	--card-border: #334155;
+	--text: #e2e8f0;
+	--muted: #94a3b8;
+	--accent: #38bdf8;
+	--accent-dark: #0284c7;
+	--green: #4ade80;
+	--red: #f87171;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	-webkit-font-smoothing: antialiased;
+}
+
+.app {
+	max-width: 480px;
+	margin: 0 auto;
+	padding: 16px 16px calc(24px + env(safe-area-inset-bottom));
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+h1 {
+	font-size: 1.5rem;
+	margin: 8px 0 0;
+}
+
+h2 {
+	font-size: 1.05rem;
+	margin: 0 0 12px;
+}
+
+.card {
+	background: var(--card);
+	border: 1px solid var(--card-border);
+	border-radius: 16px;
+	padding: 16px;
+}
+
+.muted {
+	color: var(--muted);
+}
+
+.small {
+	font-size: 0.8rem;
+}
+
+.error {
+	color: var(--red);
+}
+
+.notice {
+	background: rgba(56, 189, 248, 0.12);
+	border: 1px solid rgba(56, 189, 248, 0.35);
+	border-radius: 10px;
+	padding: 10px 12px;
+	font-size: 0.9rem;
+	margin: 12px 0 4px;
+}
+
+/* --- Jauge --- */
+.tank-card {
+	text-align: center;
+}
+
+.tank-visual {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 24px;
+}
+
+.tank-svg {
+	width: 110px;
+	height: 150px;
+}
+
+.tank-outline {
+	fill: rgba(148, 163, 184, 0.08);
+	stroke: var(--muted);
+	stroke-width: 2.5;
+}
+
+.tank-water {
+	transition: y 0.8s ease, height 0.8s ease;
+}
+
+.tank-numbers {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	text-align: left;
+}
+
+.tank-percent {
+	font-size: 2.4rem;
+	font-weight: 700;
+	color: var(--accent);
+}
+
+.tank-percent.error {
+	color: var(--red);
+}
+
+.tank-liters {
+	color: var(--muted);
+}
+
+/* --- Formulaires --- */
+button {
+	width: 100%;
+	padding: 12px;
+	margin-top: 12px;
+	border: none;
+	border-radius: 12px;
+	background: var(--accent-dark);
+	color: white;
+	font-size: 1rem;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background 0.2s;
+}
+
+button:active {
+	background: var(--accent);
+}
+
+button:disabled {
+	opacity: 0.6;
+}
+
+button.secondary {
+	background: var(--card-border);
+}
+
+label {
+	display: block;
+	font-size: 0.9rem;
+	color: var(--muted);
+	margin-top: 10px;
+}
+
+.input-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+input[type="number"] {
+	width: 90px;
+	padding: 10px;
+	border-radius: 10px;
+	border: 1px solid var(--card-border);
+	background: var(--bg);
+	color: var(--text);
+	font-size: 1rem;
+}
+
+.slider-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 8px 0;
+}
+
+input[type="range"] {
+	flex: 1;
+	accent-color: var(--accent);
+}
+
+.slider-value {
+	min-width: 60px;
+	text-align: right;
+	font-weight: 700;
+	font-size: 1.1rem;
+}
+
+/* --- Vacances --- */
+.vacation-active {
+	border-color: var(--green);
+}
+
+.badge {
+	background: rgba(74, 222, 128, 0.15);
+	color: var(--green);
+	font-size: 0.7rem;
+	padding: 3px 8px;
+	border-radius: 999px;
+	vertical-align: middle;
+	margin-left: 6px;
+}
+
+/* --- Historique --- */
+.history {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.history li {
+	border-bottom: 1px solid var(--card-border);
+}
+
+.history li:last-child {
+	border-bottom: none;
+}
+
+.history-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	background: none;
+	border: none;
+	color: var(--text);
+	padding: 12px 4px;
+	margin: 0;
+	font-size: 0.95rem;
+	font-weight: 400;
+	border-radius: 0;
+	text-align: left;
+}
+
+.history-date {
+	color: var(--muted);
+	min-width: 90px;
+	text-transform: capitalize;
+}
+
+.history-main {
+	flex: 1;
+}
+
+.history-chevron {
+	color: var(--muted);
+}
+
+.history-detail {
+	padding: 0 4px 12px;
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.history-detail p {
+	margin: 4px 0;
+}
+
+.footer {
+	text-align: center;
+}
