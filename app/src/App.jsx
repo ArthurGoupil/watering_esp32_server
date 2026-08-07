@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
 	getStatus,
 	getWaterings,
+	deleteWatering,
 	updateSettings,
 	updateVacation,
 } from "./api.js";
@@ -263,8 +264,29 @@ function VacationCard({ vacation, flow, onSaved }) {
 }
 
 /* --- Historique des arrosages --- */
-function History({ waterings }) {
+function History({ waterings, onDeleted }) {
 	const [expandedId, setExpandedId] = useState(null);
+	const [deletingId, setDeletingId] = useState(null);
+
+	const remove = async (w) => {
+		if (
+			!window.confirm(
+				`Supprimer l'arrosage du ${formatDate(w.created_at)} (${formatDuration(w.requested_seconds)}) ?`,
+			)
+		) {
+			return;
+		}
+		setDeletingId(w.id);
+		try {
+			await deleteWatering(w.id);
+			setExpandedId(null);
+			onDeleted();
+		} catch (err) {
+			alert(err.message);
+		} finally {
+			setDeletingId(null);
+		}
+	};
 
 	if (waterings.length === 0) {
 		return (
@@ -327,6 +349,13 @@ function History({ waterings }) {
 										? `${w.estimated_liters_sensor} L`
 										: "non estimable"}
 								</p>
+								<button
+									className="danger"
+									onClick={() => remove(w)}
+									disabled={deletingId === w.id}
+								>
+									{deletingId === w.id ? "…" : "Supprimer cette entrée"}
+								</button>
 							</div>
 						)}
 					</li>
@@ -390,7 +419,7 @@ export default function App() {
 				flow={status.settings.flow_l_per_min}
 				onSaved={refresh}
 			/>
-			<History waterings={waterings} />
+			<History waterings={waterings} onDeleted={refresh} />
 			<p className="muted small footer">
 				Arrosage automatique chaque matin à 8h · mise à jour auto
 			</p>

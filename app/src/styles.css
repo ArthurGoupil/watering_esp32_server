@@ -145,6 +145,15 @@ button.secondary {
 	background: var(--card-border);
 }
 
+button.danger {
+	background: rgba(248, 113, 113, 0.15);
+	color: var(--red);
+	border: 1px solid rgba(248, 113, 113, 0.4);
+	padding: 8px;
+	font-size: 0.85rem;
+	margin-top: 8px;
+}
+
 label {
 	display: block;
 	font-size: 0.9rem;

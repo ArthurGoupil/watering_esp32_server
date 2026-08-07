@@ -212,6 +212,21 @@ app.get("/api/waterings", async (req, res) => {
 	}
 });
 
+app.delete("/api/waterings/:id", async (req, res) => {
+	try {
+		const id = Number(req.params.id);
+		if (!Number.isInteger(id)) {
+			return res.status(400).json({ error: "id invalide" });
+		}
+		const deleted = await db.deleteWatering(id);
+		if (!deleted) return res.status(404).json({ error: "arrosage introuvable" });
+		log(`/api/waterings/${id}  -> entree d'historique supprimee`);
+		res.json({ ok: true });
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
 app.get("/api/measurements", async (req, res) => {
 	try {
 		const limit = Math.min(Number(req.query.limit) || 50, 500);

@@ -292,6 +292,13 @@ async function listWaterings(limit = 30) {
 	return rows;
 }
 
+async function deleteWatering(id) {
+	const { rowCount } = await pool.query("DELETE FROM waterings WHERE id = $1", [
+		id,
+	]);
+	return rowCount > 0;
+}
+
 async function listMeasurements(limit = 50) {
 	const { rows } = await pool.query(
 		"SELECT * FROM measurements ORDER BY created_at DESC LIMIT $1",
@@ -312,6 +319,7 @@ module.exports = {
 	insertMeasurement,
 	latestMeasurement,
 	insertWatering,
+	deleteWatering,
 	estimatePreviousWateringFromSensor,
 	listWaterings,
 	listMeasurements,
