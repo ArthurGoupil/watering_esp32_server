@@ -127,6 +127,15 @@ async function migrate() {
 			ON CONFLICT (key) DO NOTHING;
 
 		INSERT INTO vacation (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+		CREATE TABLE IF NOT EXISTS commands (
+			id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			manual_watering_requested BOOLEAN NOT NULL DEFAULT false,
+			requested_seconds INTEGER,
+			requested_at TIMESTAMPTZ
+		);
+
+		INSERT INTO commands (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 	`);
 }
 
@@ -146,6 +155,16 @@ async function setSetting(key, value) {
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 		[key, String(value)],
 	);
+}
+
+// Lecture brute d'un reglage cle/valeur non modelise dans getSettings()
+// (ex. flags internes comme "derniere date d'alerte Telegram envoyee").
+async function getRawSetting(key) {
+	const { rows } = await pool.query(
+		"SELECT value FROM settings WHERE key = $1",
+		[key],
+	);
+	return rows[0]?.value ?? null;
 }
 
 // --- Mode vacances ---
@@ -197,6 +216,36 @@ async function computeWateringSeconds() {
 	}
 
 	return { seconds: settings.daily_watering_seconds, source: "daily" };
+}
+
+// --- Commande d'arrosage manuel (declenche depuis l'app, execute par l'ESP32
+// au prochain reveil de sondage, au plus tard CHECKIN_INTERVAL_MINUTES apres) ---
+async function getCommand() {
+	const { rows } = await pool.query("SELECT * FROM commands WHERE id = 1");
+	return rows[0];
+}
+
+async function requestManualWatering(seconds) {
+	await pool.query(
+		`UPDATE commands SET manual_watering_requested = true,
+		 requested_seconds = $1, requested_at = now() WHERE id = 1`,
+		[seconds],
+	);
+	return getCommand();
+}
+
+async function cancelManualWatering() {
+	await pool.query(
+		`UPDATE commands SET manual_watering_requested = false,
+		 requested_seconds = NULL, requested_at = NULL WHERE id = 1`,
+	);
+	return getCommand();
+}
+
+async function clearManualWatering() {
+	await pool.query(
+		`UPDATE commands SET manual_watering_requested = false WHERE id = 1`,
+	);
 }
 
 // --- Mesures ---
@@ -322,11 +371,23 @@ async function listMeasurements(limit = 50) {
 	return rows;
 }
 
+// Un cycle quotidien complet appelle toujours /water (meme si la duree
+// renvoyee est 0s, ex. fin de vacances) : sa presence suffit a dire que
+// l'ESP32 s'est bien reveille et a communique aujourd'hui.
+async function hasWaterCheckinToday() {
+	const { rows } = await pool.query(
+		"SELECT 1 FROM measurements WHERE endpoint = '/water' AND local_date = $1 LIMIT 1",
+		[localDate()],
+	);
+	return rows.length > 0;
+}
+
 module.exports = {
 	pool,
 	migrate,
 	getSettings,
 	setSetting,
+	getRawSetting,
 	getVacation,
 	setVacation,
 	vacationDaysElapsed,
@@ -338,6 +399,11 @@ module.exports = {
 	estimatePreviousWateringFromSensor,
 	listWaterings,
 	listMeasurements,
+	hasWaterCheckinToday,
+	getCommand,
+	requestManualWatering,
+	cancelManualWatering,
+	clearManualWatering,
 	interpretDistance,
 	volumeLitersForDistance,
 	localDate,

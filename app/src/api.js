@@ -26,3 +26,12 @@ export const updateVacation = (vacation) =>
 		headers: jsonHeaders,
 		body: JSON.stringify(vacation),
 	});
+export const getManualWatering = () => request("/api/manual-watering");
+export const requestManualWatering = (seconds) =>
+	request("/api/manual-watering", {
+		method: "PUT",
+		headers: jsonHeaders,
+		body: JSON.stringify({ seconds }),
+	});
+export const cancelManualWatering = () =>
+	request("/api/manual-watering", { method: "DELETE" });

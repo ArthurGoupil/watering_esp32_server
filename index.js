@@ -27,9 +27,16 @@
 const express = require("express");
 const path = require("path");
 const db = require("./db");
+const { sendTelegramMessage, enabled: telegramEnabled } = require("./telegram");
 
 const PORT = process.env.PORT || 3000;
 const FALLBACK_WATERING_SECONDS = 500;
+
+// Heure quotidienne d'arrosage (doit correspondre a WATERING_HOUR du firmware)
+// + marge de tolerance avant de considerer le reveil comme manque.
+const WATERING_HOUR = 8;
+const MISSED_WATERING_GRACE_MINUTES = 45;
+const MISSED_WATERING_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
 const app = express();
 app.use(express.json());
@@ -153,6 +160,76 @@ app.get(["/init", "/water"], async (req, res) => {
 		received_raw_distance_cm: m.rawDistanceCm,
 		watering_seconds: seconds,
 	});
+});
+
+// --- Sondage de commande (reveil "check-in" leger, toutes les 2h, sans
+// mesure ni WiFi de longue duree) : indique si un arrosage exceptionnel a ete
+// demande depuis l'app. ---
+app.get("/command", async (req, res) => {
+	try {
+		const command = await db.getCommand();
+		res.json({
+			watering_requested: Boolean(command.manual_watering_requested),
+			requested_seconds: command.requested_seconds,
+		});
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+		log(`/command  -> ERREUR DB : ${err.message}`);
+	}
+});
+
+// Appele par l'ESP32 juste avant de lancer la pompe pour un arrosage
+// exceptionnel (mesure prise avec le WiFi deja connecte, cas rare accepte).
+app.get("/manual-water", async (req, res) => {
+	const m = parseEsp32Query(req.query);
+	const seconds = Math.round(Number(req.query.seconds));
+
+	if (m.tankLevel === null || Number.isNaN(seconds) || seconds <= 0) {
+		log("/manual-water APPEL INVALIDE (tank_level ou seconds manquant/invalide)");
+		return res.status(400).json({ error: "parametres manquants ou invalides" });
+	}
+
+	logMeasurement("/manual-water", m);
+
+	let measurementId = null;
+	try {
+		measurementId = await db.insertMeasurement("/manual-water", m);
+		const settings = await db.getSettings();
+		const interpretation = db.interpretDistance(m.rawDistanceCm);
+		await db.insertWatering({
+			requestedSeconds: seconds,
+			source: "manual",
+			distanceBeforeCm: m.rawDistanceCm >= 0 ? m.rawDistanceCm : null,
+			tankPercentBefore: interpretation.percent,
+			tankLitersBefore:
+				interpretation.liters === null
+					? null
+					: Math.round(interpretation.liters * 10) / 10,
+			estimatedLitersFlow:
+				Math.round((seconds / 60) * settings.flow_l_per_min * 10) / 10,
+			measurementId,
+		});
+		if (m.rawDistanceCm !== null && m.rawDistanceCm >= 0) {
+			await db.estimatePreviousWateringFromSensor(m.rawDistanceCm);
+		}
+		await db.clearManualWatering();
+	} catch (err) {
+		log(`/manual-water  -> ERREUR DB : ${err.message}`);
+	}
+
+	log(`/manual-water  -> arrosage exceptionnel demarre = ${seconds}s`);
+	sendTelegramMessage(
+		`🚿 Arrosage exceptionnel démarré : ${seconds}s.`,
+	);
+
+	res.json({ ok: true, watering_seconds: seconds, measurement_id: measurementId });
+});
+
+// Appele par l'ESP32 juste apres la fin de la pompe (arrosage exceptionnel).
+app.get("/manual-water/done", (req, res) => {
+	log("/manual-water/done  -> arrosage exceptionnel termine");
+	sendTelegramMessage("✅ Arrosage exceptionnel terminé.");
+	res.status(204).end();
 });
 
 // --- API de l'application ---
@@ -326,6 +403,49 @@ app.put("/api/vacation", async (req, res) => {
 	}
 });
 
+app.get("/api/manual-watering", async (req, res) => {
+	try {
+		const command = await db.getCommand();
+		res.json({
+			requested: Boolean(command.manual_watering_requested),
+			requested_seconds: command.requested_seconds,
+			requested_at: command.requested_at,
+		});
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
+app.put("/api/manual-watering", async (req, res) => {
+	try {
+		const seconds = Number(req.body.seconds);
+		if (Number.isNaN(seconds) || seconds <= 0 || seconds > 1800) {
+			return res
+				.status(400)
+				.json({ error: "seconds doit etre entre 1 et 1800" });
+		}
+		const command = await db.requestManualWatering(Math.round(seconds));
+		log(`/api/manual-watering  -> arrosage exceptionnel demande : ${Math.round(seconds)}s (sera lance au prochain reveil de sondage, <= 2h)`);
+		res.json({
+			requested: Boolean(command.manual_watering_requested),
+			requested_seconds: command.requested_seconds,
+			requested_at: command.requested_at,
+		});
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
+app.delete("/api/manual-watering", async (req, res) => {
+	try {
+		await db.cancelManualWatering();
+		log("/api/manual-watering  -> demande d'arrosage exceptionnel annulee");
+		res.json({ ok: true });
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
 // --- Sante + application statique ---
 app.get("/health", (req, res) => {
 	res.json({ status: "ok", uptime_seconds: process.uptime() });
@@ -334,11 +454,49 @@ app.get("/health", (req, res) => {
 const publicDir = path.join(__dirname, "public");
 app.use(express.static(publicDir));
 // Toute autre route GET non-API renvoie l'app React (routing cote client).
-app.get(/^\/(?!api|init|water|health).*/, (req, res) => {
-	res.sendFile(path.join(publicDir, "index.html"), (err) => {
-		if (err) res.status(404).json({ error: "application non buildee" });
-	});
-});
+app.get(
+	/^\/(?!api|init|water|command|manual-water|health).*/,
+	(req, res) => {
+		res.sendFile(path.join(publicDir, "index.html"), (err) => {
+			if (err) res.status(404).json({ error: "application non buildee" });
+		});
+	},
+);
+
+// --- Alerte Telegram si le reveil quotidien n'a pas eu lieu ---
+// Le processus Express tourne en continu (maintenu eveille par un ping
+// externe sur /health) : un simple setInterval suffit, pas besoin d'un addon
+// de type Heroku Scheduler.
+async function checkMissedWatering() {
+	if (!telegramEnabled) return;
+	try {
+		const now = new Date();
+		const parisTime = new Date(
+			now.toLocaleString("en-US", { timeZone: "Europe/Paris" }),
+		);
+		const graceMinutesPastMidnight =
+			WATERING_HOUR * 60 + MISSED_WATERING_GRACE_MINUTES;
+		const nowMinutesPastMidnight =
+			parisTime.getHours() * 60 + parisTime.getMinutes();
+		if (nowMinutesPastMidnight < graceMinutesPastMidnight) return;
+
+		const today = db.localDate();
+		const lastAlertDate = await db.getRawSetting("last_missed_alert_date");
+		if (lastAlertDate === today) return; // deja alerte aujourd'hui
+
+		const checkedIn = await db.hasWaterCheckinToday();
+		if (checkedIn) return;
+
+		await sendTelegramMessage(
+			`⚠️ Aucun arrosage detecte aujourd'hui (attendu vers ${WATERING_HOUR}h). ` +
+				"Verifiez que l'ESP32 est bien reveille (LED continue = probleme).",
+		);
+		await db.setSetting("last_missed_alert_date", today);
+		log("checkMissedWatering  -> alerte Telegram envoyee (arrosage quotidien manque)");
+	} catch (err) {
+		log(`checkMissedWatering  -> ERREUR : ${err.message}`);
+	}
+}
 
 // --- Demarrage ---
 async function start() {
@@ -351,6 +509,12 @@ async function start() {
 		} catch (err) {
 			log(`ERREUR migration DB : ${err.message}`);
 		}
+	}
+
+	if (!telegramEnabled) {
+		log("Notifications Telegram desactivees (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID absents).");
+	} else {
+		setInterval(checkMissedWatering, MISSED_WATERING_CHECK_INTERVAL_MS);
 	}
 
 	app.listen(PORT, () => {

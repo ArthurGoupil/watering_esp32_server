@@ -5,6 +5,9 @@ import {
 	deleteWatering,
 	updateSettings,
 	updateVacation,
+	getManualWatering,
+	requestManualWatering,
+	cancelManualWatering,
 } from "./api.js";
 
 const formatDate = (iso) =>
@@ -263,6 +266,85 @@ function VacationCard({ vacation, flow, onSaved }) {
 	);
 }
 
+/* --- Arrosage exceptionnel (déclenché à distance) --- */
+function ManualWateringCard({ manualWatering, onSaved }) {
+	const [seconds, setSeconds] = useState(120);
+	const [busy, setBusy] = useState(false);
+
+	const pending = manualWatering?.requested;
+
+	const trigger = async () => {
+		setBusy(true);
+		try {
+			await requestManualWatering(seconds);
+			onSaved();
+		} catch (err) {
+			alert(err.message);
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const cancel = async () => {
+		setBusy(true);
+		try {
+			await cancelManualWatering();
+			onSaved();
+		} catch (err) {
+			alert(err.message);
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	return (
+		<div className={`card ${pending ? "vacation-active" : ""}`}>
+			<h2>
+				Arrosage exceptionnel{" "}
+				{pending && <span className="badge">en attente</span>}
+			</h2>
+			{pending ? (
+				<>
+					<p>
+						Demande de <strong>{formatDuration(manualWatering.requested_seconds)}</strong>{" "}
+						enregistrée.
+					</p>
+					<p className="muted">
+						Sera lancé au prochain réveil de sondage de l’ESP32 (au plus tard
+						2h après la demande, dès qu’il se reconnecte au WiFi). Une
+						notification Telegram confirmera le démarrage puis la fin.
+					</p>
+					<button onClick={cancel} disabled={busy} className="secondary">
+						{busy ? "…" : "Annuler la demande"}
+					</button>
+				</>
+			) : (
+				<>
+					<div className="slider-row">
+						<input
+							type="range"
+							min="10"
+							max="1800"
+							step="10"
+							value={seconds}
+							onChange={(e) => setSeconds(Number(e.target.value))}
+						/>
+						<span className="slider-value">{formatDuration(seconds)}</span>
+					</div>
+					<p className="muted">
+						Déclenche un arrosage ponctuel, sans désactiver la mise en veille
+						de l’ESP32 (économie de batterie conservée). Il sera exécuté au
+						prochain réveil de sondage, dans un délai maximum de 2h.
+					</p>
+					<button onClick={trigger} disabled={busy}>
+						{busy ? "…" : "Arroser maintenant"}
+					</button>
+				</>
+			)}
+		</div>
+	);
+}
+
 /* --- Historique des arrosages --- */
 function History({ waterings, onDeleted }) {
 	const [expandedId, setExpandedId] = useState(null);
@@ -302,6 +384,7 @@ function History({ waterings, onDeleted }) {
 		vacation: "vacances",
 		vacation_ended: "vacances terminées",
 		fallback: "secours",
+		manual: "exceptionnel",
 	};
 
 	return (
@@ -369,13 +452,19 @@ function History({ waterings, onDeleted }) {
 export default function App() {
 	const [status, setStatus] = useState(null);
 	const [waterings, setWaterings] = useState([]);
+	const [manualWatering, setManualWatering] = useState(null);
 	const [error, setError] = useState(null);
 
 	const refresh = async () => {
 		try {
-			const [s, w] = await Promise.all([getStatus(), getWaterings()]);
+			const [s, w, m] = await Promise.all([
+				getStatus(),
+				getWaterings(),
+				getManualWatering(),
+			]);
 			setStatus(s);
 			setWaterings(w);
+			setManualWatering(m);
 			setError(null);
 		} catch (err) {
 			setError(err.message);
@@ -413,6 +502,7 @@ export default function App() {
 		<main className="app">
 			<h1>💧 Arrosage</h1>
 			<TankGauge tank={status.tank} />
+			<ManualWateringCard manualWatering={manualWatering} onSaved={refresh} />
 			<WateringSettings settings={status.settings} onSaved={refresh} />
 			<VacationCard
 				vacation={status.vacation ?? { active: false }}
