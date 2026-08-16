@@ -167,6 +167,23 @@ async function getRawSetting(key) {
 	return rows[0]?.value ?? null;
 }
 
+// --- Prochain reveil de l'ESP32 (rapporte par le firmware a chaque
+// endormissement, pour affichage dans l'app) ---
+async function setNextWake(seconds, fullCycle) {
+	const at = new Date(Date.now() + seconds * 1000).toISOString();
+	await setSetting("next_wake_at", at);
+	await setSetting("next_wake_full_cycle", fullCycle ? "true" : "false");
+}
+
+async function getNextWake() {
+	const at = await getRawSetting("next_wake_at");
+	if (!at) return null;
+	return {
+		at,
+		full_cycle: (await getRawSetting("next_wake_full_cycle")) === "true",
+	};
+}
+
 // --- Mode vacances ---
 async function getVacation() {
 	const { rows } = await pool.query("SELECT * FROM vacation WHERE id = 1");
@@ -388,6 +405,8 @@ module.exports = {
 	getSettings,
 	setSetting,
 	getRawSetting,
+	setNextWake,
+	getNextWake,
 	getVacation,
 	setVacation,
 	vacationDaysElapsed,

@@ -30,6 +30,23 @@ const formatDuration = (seconds) => {
 	return sec === 0 ? `${min} min` : `${min} min ${sec} s`;
 };
 
+/* --- Bandeau prochain réveil de l'ESP32 --- */
+function NextWakeInfo({ nextWake }) {
+	if (!nextWake) return null;
+
+	const at = new Date(nextWake.at);
+	const label = nextWake.full_cycle
+		? "arrosage quotidien"
+		: "sondage (arrosage exceptionnel éventuel)";
+
+	return (
+		<p className="muted small next-wake">
+			📡 Prochain réveil de l’ESP32 : {formatDate(at)} à {formatTime(at)} (
+			{label})
+		</p>
+	);
+}
+
 /* --- Jauge de cuve (SVG) --- */
 function TankGauge({ tank }) {
 	if (!tank) {
@@ -501,6 +518,7 @@ export default function App() {
 	return (
 		<main className="app">
 			<h1>💧 Arrosage</h1>
+			<NextWakeInfo nextWake={status.next_wake} />
 			<TankGauge tank={status.tank} />
 			<ManualWateringCard manualWatering={manualWatering} onSaved={refresh} />
 			<WateringSettings settings={status.settings} onSaved={refresh} />

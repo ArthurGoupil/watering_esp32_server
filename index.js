@@ -232,13 +232,32 @@ app.get("/manual-water/done", (req, res) => {
 	res.status(204).end();
 });
 
+// Appele par l'ESP32 juste avant chaque endormissement (WiFi encore
+// connecte) : indique quand aura lieu le prochain reveil, pour affichage
+// dans l'app.
+app.get("/next-wake", async (req, res) => {
+	try {
+		const seconds = Number(req.query.seconds);
+		const fullCycle = req.query.full_cycle === "true";
+		if (Number.isNaN(seconds) || seconds <= 0) {
+			return res.status(400).json({ error: "seconds manquant ou invalide" });
+		}
+		await db.setNextWake(seconds, fullCycle);
+		res.status(204).end();
+	} catch (err) {
+		log(`/next-wake  -> ERREUR DB : ${err.message}`);
+		res.status(500).json({ error: err.message });
+	}
+});
+
 // --- API de l'application ---
 app.get("/api/status", async (req, res) => {
 	try {
-		const [measurement, settings, vacation] = await Promise.all([
+		const [measurement, settings, vacation, nextWake] = await Promise.all([
 			db.latestMeasurement(),
 			db.getSettings(),
 			db.getVacation(),
+			db.getNextWake(),
 		]);
 
 		let tank = null;
@@ -274,7 +293,7 @@ app.get("/api/status", async (req, res) => {
 			};
 		}
 
-		res.json({ tank, settings, vacation: vacationStatus });
+		res.json({ tank, settings, vacation: vacationStatus, next_wake: nextWake });
 	} catch (err) {
 		res.status(500).json({ error: err.message });
 	}
@@ -455,7 +474,7 @@ const publicDir = path.join(__dirname, "public");
 app.use(express.static(publicDir));
 // Toute autre route GET non-API renvoie l'app React (routing cote client).
 app.get(
-	/^\/(?!api|init|water|command|manual-water|health).*/,
+	/^\/(?!api|init|water|command|manual-water|next-wake|health).*/,
 	(req, res) => {
 		res.sendFile(path.join(publicDir, "index.html"), (err) => {
 			if (err) res.status(404).json({ error: "application non buildee" });

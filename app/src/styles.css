@@ -57,6 +57,11 @@ h2 {
 	font-size: 0.8rem;
 }
 
+.next-wake {
+	text-align: center;
+	margin: -4px 0 4px;
+}
+
 .error {
 	color: var(--red);
 }
