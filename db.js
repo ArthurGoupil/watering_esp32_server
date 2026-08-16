@@ -132,10 +132,13 @@ async function migrate() {
 			id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
 			manual_watering_requested BOOLEAN NOT NULL DEFAULT false,
 			requested_seconds INTEGER,
-			requested_at TIMESTAMPTZ
+			requested_at TIMESTAMPTZ,
+			request_id INTEGER NOT NULL DEFAULT 0
 		);
 
 		INSERT INTO commands (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+		ALTER TABLE commands ADD COLUMN IF NOT EXISTS request_id INTEGER NOT NULL DEFAULT 0;
 	`);
 }
 
@@ -245,7 +248,8 @@ async function getCommand() {
 async function requestManualWatering(seconds) {
 	await pool.query(
 		`UPDATE commands SET manual_watering_requested = true,
-		 requested_seconds = $1, requested_at = now() WHERE id = 1`,
+		 requested_seconds = $1, requested_at = now(),
+		 request_id = request_id + 1 WHERE id = 1`,
 		[seconds],
 	);
 	return getCommand();
@@ -259,10 +263,69 @@ async function cancelManualWatering() {
 	return getCommand();
 }
 
-async function clearManualWatering() {
-	await pool.query(
-		`UPDATE commands SET manual_watering_requested = false WHERE id = 1`,
-	);
+// Ne consomme la commande QUE si request_id correspond encore a celle recue
+// par l'ESP32 au moment du sondage : evite qu'un arrosage annule/remplace
+// entre-temps ne soit quand meme execute (ou qu'une commande plus recente ne
+// soit effacee par erreur). Retourne null si la commande a change depuis.
+//
+// La consommation de la commande ET l'insertion de l'historique sont faites
+// dans UNE SEULE transaction : si l'une des deux echoue, l'autre est annulee
+// (rollback), pour ne jamais se retrouver avec une commande "consommee" sans
+// arrosage enregistre (ce qui aurait fait perdre la demande sans arrosage
+// reel).
+async function recordManualWatering(requestId, seconds, measurementId, distanceCm) {
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+
+		const consumeResult = await client.query(
+			`UPDATE commands SET manual_watering_requested = false
+			 WHERE id = 1 AND request_id = $1 AND manual_watering_requested = true
+			 RETURNING *`,
+			[requestId],
+		);
+		if (consumeResult.rows.length === 0) {
+			await client.query("ROLLBACK");
+			return { cancelled: true };
+		}
+
+		const settingsResult = await client.query(
+			"SELECT key, value FROM settings",
+		);
+		const map = Object.fromEntries(
+			settingsResult.rows.map((r) => [r.key, r.value]),
+		);
+		const flow = Number(map.flow_l_per_min ?? 1.26);
+		const interpretation = interpretDistance(distanceCm);
+
+		await client.query(
+			`INSERT INTO waterings
+			 (local_date, requested_seconds, source, distance_before_cm,
+			  tank_percent_before, tank_liters_before, estimated_liters_flow,
+			  measurement_id)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			[
+				localDate(),
+				seconds,
+				"manual",
+				distanceCm !== null && distanceCm >= 0 ? distanceCm : null,
+				interpretation.percent,
+				interpretation.liters === null
+					? null
+					: Math.round(interpretation.liters * 10) / 10,
+				Math.round((seconds / 60) * flow * 10) / 10,
+				measurementId,
+			],
+		);
+
+		await client.query("COMMIT");
+		return { cancelled: false };
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
 }
 
 // --- Mesures ---
@@ -422,7 +485,7 @@ module.exports = {
 	getCommand,
 	requestManualWatering,
 	cancelManualWatering,
-	clearManualWatering,
+	recordManualWatering,
 	interpretDistance,
 	volumeLitersForDistance,
 	localDate,

@@ -171,6 +171,7 @@ app.get("/command", async (req, res) => {
 		res.json({
 			watering_requested: Boolean(command.manual_watering_requested),
 			requested_seconds: command.requested_seconds,
+			request_id: command.request_id,
 		});
 	} catch (err) {
 		res.status(500).json({ error: err.message });
@@ -180,12 +181,21 @@ app.get("/command", async (req, res) => {
 
 // Appele par l'ESP32 juste avant de lancer la pompe pour un arrosage
 // exceptionnel (mesure prise avec le WiFi deja connecte, cas rare accepte).
+// request_id doit correspondre exactement a la commande recue via /command :
+// si elle a ete annulee/remplacee entre-temps, la requete est refusee (ok:false)
+// et l'ESP32 ne doit PAS activer la pompe.
 app.get("/manual-water", async (req, res) => {
 	const m = parseEsp32Query(req.query);
 	const seconds = Math.round(Number(req.query.seconds));
+	const requestId = Number(req.query.request_id);
 
-	if (m.tankLevel === null || Number.isNaN(seconds) || seconds <= 0) {
-		log("/manual-water APPEL INVALIDE (tank_level ou seconds manquant/invalide)");
+	if (
+		m.tankLevel === null ||
+		Number.isNaN(seconds) ||
+		seconds <= 0 ||
+		Number.isNaN(requestId)
+	) {
+		log("/manual-water APPEL INVALIDE (parametre manquant ou invalide)");
 		return res.status(400).json({ error: "parametres manquants ou invalides" });
 	}
 
@@ -194,27 +204,26 @@ app.get("/manual-water", async (req, res) => {
 	let measurementId = null;
 	try {
 		measurementId = await db.insertMeasurement("/manual-water", m);
-		const settings = await db.getSettings();
-		const interpretation = db.interpretDistance(m.rawDistanceCm);
-		await db.insertWatering({
-			requestedSeconds: seconds,
-			source: "manual",
-			distanceBeforeCm: m.rawDistanceCm >= 0 ? m.rawDistanceCm : null,
-			tankPercentBefore: interpretation.percent,
-			tankLitersBefore:
-				interpretation.liters === null
-					? null
-					: Math.round(interpretation.liters * 10) / 10,
-			estimatedLitersFlow:
-				Math.round((seconds / 60) * settings.flow_l_per_min * 10) / 10,
+
+		const result = await db.recordManualWatering(
+			requestId,
+			seconds,
 			measurementId,
-		});
+			m.rawDistanceCm,
+		);
+		if (result.cancelled) {
+			log(`/manual-water  -> commande annulee/remplacee (request_id=${requestId}) : pompe non activee`);
+			return res.json({ ok: false, cancelled: true, watering_seconds: 0 });
+		}
+
 		if (m.rawDistanceCm !== null && m.rawDistanceCm >= 0) {
 			await db.estimatePreviousWateringFromSensor(m.rawDistanceCm);
 		}
-		await db.clearManualWatering();
 	} catch (err) {
 		log(`/manual-water  -> ERREUR DB : ${err.message}`);
+		return res
+			.status(500)
+			.json({ ok: false, error: err.message, watering_seconds: 0 });
 	}
 
 	log(`/manual-water  -> arrosage exceptionnel demarre = ${seconds}s`);
@@ -506,10 +515,14 @@ async function checkMissedWatering() {
 		const checkedIn = await db.hasWaterCheckinToday();
 		if (checkedIn) return;
 
-		await sendTelegramMessage(
+		const sent = await sendTelegramMessage(
 			`⚠️ Aucun arrosage detecte aujourd'hui (attendu vers ${WATERING_HOUR}h). ` +
 				"Verifiez que l'ESP32 est bien reveille (LED continue = probleme).",
 		);
+		if (!sent) {
+			log("checkMissedWatering  -> ECHEC envoi Telegram, nouvelle tentative au prochain controle (5 min)");
+			return;
+		}
 		await db.setSetting("last_missed_alert_date", today);
 		log("checkMissedWatering  -> alerte Telegram envoyee (arrosage quotidien manque)");
 	} catch (err) {
