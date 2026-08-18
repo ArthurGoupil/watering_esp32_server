@@ -387,6 +387,55 @@ async function insertWatering(w) {
 	return rows[0].id;
 }
 
+// Atomically records the one allowed automatic watering for a local day.
+// Manual waterings intentionally do not participate in this rule. A
+// transaction-scoped Postgres advisory lock prevents two near-simultaneous
+// /water calls from both seeing "no watering yet" and starting the pump.
+async function recordAutomaticWateringOnceToday(w) {
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		await client.query("SELECT pg_advisory_xact_lock($1)", [5172026]);
+
+		const day = localDate();
+		const { rows: existing } = await client.query(
+			`SELECT id FROM waterings
+			 WHERE local_date = $1 AND source <> 'manual'
+			 LIMIT 1`,
+			[day],
+		);
+		if (existing.length > 0) {
+			await client.query("COMMIT");
+			return { created: false, id: existing[0].id };
+		}
+
+		const { rows } = await client.query(
+			`INSERT INTO waterings
+			 (local_date, requested_seconds, source, distance_before_cm,
+			  tank_percent_before, tank_liters_before, estimated_liters_flow,
+			  measurement_id)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+			[
+				day,
+				w.requestedSeconds,
+				w.source,
+				w.distanceBeforeCm,
+				w.tankPercentBefore,
+				w.tankLitersBefore,
+				w.estimatedLitersFlow,
+				w.measurementId,
+			],
+		);
+		await client.query("COMMIT");
+		return { created: true, id: rows[0].id };
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
 /*
  * Estimation "capteur" de l'arrosage precedent : difference de volume entre
  * la mesure d'avant-arrosage de la veille et celle d'aujourd'hui. On ne
@@ -477,6 +526,7 @@ module.exports = {
 	insertMeasurement,
 	latestMeasurement,
 	insertWatering,
+	recordAutomaticWateringOnceToday,
 	deleteWatering,
 	estimatePreviousWateringFromSensor,
 	listWaterings,

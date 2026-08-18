@@ -128,12 +128,14 @@ app.get(["/init", "/water"], async (req, res) => {
 
 	log(`/water  -> duree d'arrosage renvoyee = ${seconds}s (source : ${source})`);
 
-	// Enregistrement de l'arrosage + estimation capteur de l'arrosage precedent.
+	// Only one automatic watering is allowed per Paris-local day. This is
+	// enforced atomically in PostgreSQL so an ESP32 reboot, a retry, or an
+	// unexpected second client can never receive a second pump duration.
 	try {
 		if (seconds > 0) {
 			const settings = await db.getSettings();
 			const interpretation = db.interpretDistance(m.rawDistanceCm);
-			await db.insertWatering({
+			const result = await db.recordAutomaticWateringOnceToday({
 				requestedSeconds: seconds,
 				source,
 				distanceBeforeCm: m.rawDistanceCm >= 0 ? m.rawDistanceCm : null,
@@ -146,12 +148,28 @@ app.get(["/init", "/water"], async (req, res) => {
 					Math.round((seconds / 60) * settings.flow_l_per_min * 10) / 10,
 				measurementId,
 			});
+			if (!result.created) {
+				log(
+					`/water  -> arrosage automatique deja enregistre aujourd'hui (id=${result.id}) : 0s renvoye`,
+				);
+				seconds = 0;
+				source = "duplicate";
+			}
 		}
-		if (m.rawDistanceCm !== null && m.rawDistanceCm >= 0) {
+		if (
+			seconds > 0 &&
+			m.rawDistanceCm !== null &&
+			m.rawDistanceCm >= 0
+		) {
 			await db.estimatePreviousWateringFromSensor(m.rawDistanceCm);
 		}
 	} catch (err) {
-		log(`/water  -> ERREUR DB (arrosage non enregistre) : ${err.message}`);
+		log(`/water  -> ERREUR DB (pompe bloquee par securite) : ${err.message}`);
+		return res.status(503).json({
+			ok: false,
+			error: "impossible de verifier l'arrosage quotidien",
+			watering_seconds: 0,
+		});
 	}
 
 	res.json({
