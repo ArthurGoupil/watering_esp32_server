@@ -27,3 +27,6 @@ steps:
 
 images:
   - gcr.io/$PROJECT_ID/watering-esp32-server:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
