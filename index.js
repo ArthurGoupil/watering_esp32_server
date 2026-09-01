@@ -253,10 +253,35 @@ app.get("/manual-water", async (req, res) => {
 });
 
 // Appele par l'ESP32 juste apres la fin de la pompe (arrosage exceptionnel).
-app.get("/manual-water/done", (req, res) => {
-	log("/manual-water/done  -> arrosage exceptionnel termine");
-	sendTelegramMessage("✅ Arrosage exceptionnel terminé.");
-	res.status(204).end();
+// request_id makes retries safe: an ESP32 may not receive a successful HTTP
+// response and retry, but Telegram must still receive one completion message.
+app.get("/manual-water/done", async (req, res) => {
+	const requestId = Number(req.query.request_id);
+	if (!Number.isInteger(requestId) || requestId <= 0) {
+		return res.status(400).json({ error: "request_id manquant ou invalide" });
+	}
+
+	try {
+		const settingKey = "last_manual_watering_done_request_id";
+		const lastCompletedRequestId = await db.getRawSetting(settingKey);
+		if (lastCompletedRequestId === String(requestId)) {
+			log(`/manual-water/done  -> deja traite (request_id=${requestId})`);
+			return res.status(204).end();
+		}
+
+		const sent = await sendTelegramMessage("✅ Arrosage exceptionnel terminé.");
+		if (!sent) {
+			log(`/manual-water/done  -> ECHEC envoi Telegram (request_id=${requestId})`);
+			return res.status(503).json({ error: "notification Telegram non envoyee" });
+		}
+
+		await db.setSetting(settingKey, requestId);
+		log(`/manual-water/done  -> arrosage exceptionnel termine (request_id=${requestId})`);
+		res.status(204).end();
+	} catch (err) {
+		log(`/manual-water/done  -> ERREUR : ${err.message}`);
+		res.status(500).json({ error: err.message });
+	}
 });
 
 // Appele par l'ESP32 juste avant chaque endormissement (WiFi encore
