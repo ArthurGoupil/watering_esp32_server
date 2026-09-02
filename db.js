@@ -136,6 +136,14 @@ async function migrate() {
 			request_id INTEGER NOT NULL DEFAULT 0
 		);
 
+		CREATE TABLE IF NOT EXISTS device_diagnostics (
+			id SERIAL PRIMARY KEY,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			reset_reason INTEGER NOT NULL,
+			persistent_checkpoint TEXT,
+			events JSONB NOT NULL
+		);
+
 		INSERT INTO commands (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 		ALTER TABLE commands ADD COLUMN IF NOT EXISTS request_id INTEGER NOT NULL DEFAULT 0;
@@ -500,6 +508,32 @@ async function listMeasurements(limit = 50) {
 	return rows;
 }
 
+// --- Diagnostic firmware ESP32 ---
+async function insertDeviceDiagnostics({
+	resetReason,
+	persistentCheckpoint,
+	events,
+}) {
+	const { rows } = await pool.query(
+		`INSERT INTO device_diagnostics
+		 (reset_reason, persistent_checkpoint, events)
+		 VALUES ($1, $2, $3::jsonb)
+		 RETURNING id`,
+		[resetReason, persistentCheckpoint, JSON.stringify(events)],
+	);
+	return rows[0].id;
+}
+
+async function listDeviceDiagnostics(limit = 20) {
+	const { rows } = await pool.query(
+		`SELECT * FROM device_diagnostics
+		 ORDER BY created_at DESC
+		 LIMIT $1`,
+		[limit],
+	);
+	return rows;
+}
+
 // Un cycle quotidien complet appelle toujours /water (meme si la duree
 // renvoyee est 0s, ex. fin de vacances) : sa presence suffit a dire que
 // l'ESP32 s'est bien reveille et a communique aujourd'hui.
@@ -531,6 +565,8 @@ module.exports = {
 	estimatePreviousWateringFromSensor,
 	listWaterings,
 	listMeasurements,
+	insertDeviceDiagnostics,
+	listDeviceDiagnostics,
 	hasWaterCheckinToday,
 	getCommand,
 	requestManualWatering,

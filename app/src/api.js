@@ -12,6 +12,8 @@ async function request(url, options) {
 export const getStatus = () => request("/api/status");
 export const getWaterings = (limit = 30) =>
 	request(`/api/waterings?limit=${limit}`);
+export const getDeviceDiagnostics = (limit = 20) =>
+	request(`/api/device-diagnostics?limit=${limit}`);
 export const deleteWatering = (id) =>
 	request(`/api/waterings/${id}`, { method: "DELETE" });
 export const updateSettings = (settings) =>

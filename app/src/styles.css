@@ -232,6 +232,29 @@ input[type="range"] {
 	border-bottom: none;
 }
 
+.diagnostics {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.diagnostics li {
+	border-bottom: 1px solid var(--card-border);
+}
+
+.diagnostics li:last-child {
+	border-bottom: none;
+}
+
+.diagnostic-events {
+	margin: 8px 0 0;
+	padding-left: 20px;
+	color: var(--muted);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.75rem;
+	line-height: 1.55;
+}
+
 .history-row {
 	display: flex;
 	align-items: center;

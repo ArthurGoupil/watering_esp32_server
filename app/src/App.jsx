@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
 	getStatus,
 	getWaterings,
+	getDeviceDiagnostics,
 	deleteWatering,
 	updateSettings,
 	updateVacation,
@@ -362,6 +363,72 @@ function ManualWateringCard({ manualWatering, onSaved }) {
 	);
 }
 
+/* --- Journaux de diagnostic ESP32 --- */
+function DiagnosticsCard({ diagnostics }) {
+	const [expandedId, setExpandedId] = useState(null);
+
+	if (diagnostics.length === 0) {
+		return (
+			<div className="card">
+				<h2>Diagnostic ESP32</h2>
+				<p className="muted">
+					Aucun journal reçu pour l’instant. Les journaux sont envoyés au
+					prochain réveil WiFi après le flash du firmware de diagnostic.
+				</p>
+			</div>
+		);
+	}
+
+	return (
+		<div className="card">
+			<h2>Diagnostic ESP32</h2>
+			<p className="muted small">
+				Derniers événements conservés par la carte avant son réveil.
+			</p>
+			<ul className="diagnostics">
+				{diagnostics.map((diagnostic) => (
+					<li key={diagnostic.id}>
+						<button
+							className="history-row"
+							onClick={() =>
+								setExpandedId(
+									expandedId === diagnostic.id ? null : diagnostic.id,
+								)
+							}
+						>
+							<span className="history-date">
+								{formatDate(diagnostic.created_at)}
+							</span>
+							<span className="history-main">
+								Reset : {diagnostic.reset_reason}
+								{diagnostic.persistent_checkpoint &&
+									` · ${diagnostic.persistent_checkpoint}`}
+							</span>
+							<span className="history-chevron">
+								{expandedId === diagnostic.id ? "▾" : "▸"}
+							</span>
+						</button>
+						{expandedId === diagnostic.id && (
+							<div className="history-detail">
+								<p>Reçu à : {formatTime(diagnostic.created_at)}</p>
+								<p>
+									Dernier jalon persistant :{" "}
+									{diagnostic.persistent_checkpoint ?? "—"}
+								</p>
+								<ol className="diagnostic-events">
+									{diagnostic.events.map((event, index) => (
+										<li key={`${diagnostic.id}-${index}`}>{event}</li>
+									))}
+								</ol>
+							</div>
+						)}
+					</li>
+				))}
+			</ul>
+		</div>
+	);
+}
+
 /* --- Historique des arrosages --- */
 function History({ waterings, onDeleted }) {
 	const [expandedId, setExpandedId] = useState(null);
@@ -469,18 +536,21 @@ function History({ waterings, onDeleted }) {
 export default function App() {
 	const [status, setStatus] = useState(null);
 	const [waterings, setWaterings] = useState([]);
+	const [diagnostics, setDiagnostics] = useState([]);
 	const [manualWatering, setManualWatering] = useState(null);
 	const [error, setError] = useState(null);
 
 	const refresh = async () => {
 		try {
-			const [s, w, m] = await Promise.all([
+			const [s, w, d, m] = await Promise.all([
 				getStatus(),
 				getWaterings(),
+				getDeviceDiagnostics(),
 				getManualWatering(),
 			]);
 			setStatus(s);
 			setWaterings(w);
+			setDiagnostics(d);
 			setManualWatering(m);
 			setError(null);
 		} catch (err) {
@@ -528,6 +598,7 @@ export default function App() {
 				onSaved={refresh}
 			/>
 			<History waterings={waterings} onDeleted={refresh} />
+			<DiagnosticsCard diagnostics={diagnostics} />
 			<p className="muted small footer">
 				Arrosage automatique chaque matin à 8h · mise à jour auto
 			</p>

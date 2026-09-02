@@ -302,6 +302,39 @@ app.get("/next-wake", async (req, res) => {
 	}
 });
 
+// Sent by the ESP32 on the next successful WiFi connection after a reset.
+// The firmware keeps a short RTC event ring plus its last flash-persisted
+// checkpoint, so a manual reboot can reveal the last step reached before a
+// watchdog, panic, or power-related reset.
+app.post("/device-diagnostics", async (req, res) => {
+	const { reset_reason: resetReason, persistent_checkpoint: checkpoint, events } =
+		req.body ?? {};
+	if (
+		!Number.isInteger(resetReason) ||
+		(checkpoint !== null && checkpoint !== undefined && typeof checkpoint !== "string") ||
+		!Array.isArray(events) ||
+		events.length > 30 ||
+		events.some((event) => typeof event !== "string" || event.length > 120)
+	) {
+		return res.status(400).json({ error: "diagnostic ESP32 invalide" });
+	}
+
+	try {
+		const id = await db.insertDeviceDiagnostics({
+			resetReason,
+			persistentCheckpoint: checkpoint || null,
+			events,
+		});
+		log(
+			`/device-diagnostics -> enregistre id=${id}, reset=${resetReason}, events=${events.length}`,
+		);
+		res.status(204).end();
+	} catch (err) {
+		log(`/device-diagnostics -> ERREUR DB : ${err.message}`);
+		res.status(500).json({ error: err.message });
+	}
+});
+
 // --- API de l'application ---
 app.get("/api/status", async (req, res) => {
 	try {
@@ -355,6 +388,15 @@ app.get("/api/waterings", async (req, res) => {
 	try {
 		const limit = Math.min(Number(req.query.limit) || 30, 200);
 		res.json(await db.listWaterings(limit));
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
+app.get("/api/device-diagnostics", async (req, res) => {
+	try {
+		const limit = Math.min(Number(req.query.limit) || 20, 100);
+		res.json(await db.listDeviceDiagnostics(limit));
 	} catch (err) {
 		res.status(500).json({ error: err.message });
 	}
