@@ -16,6 +16,7 @@
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const enabled = Boolean(BOT_TOKEN && CHAT_ID);
+const TELEGRAM_TIMEOUT_MS = 10_000;
 
 async function sendTelegramMessage(text) {
 	if (!enabled) return false;
@@ -26,10 +27,12 @@ async function sendTelegramMessage(text) {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ chat_id: CHAT_ID, text, parse_mode: "HTML" }),
+				signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
 			},
 		);
 		return res.ok;
-	} catch {
+	} catch (err) {
+		console.error(`[Telegram] sendMessage failed: ${err.message}`);
 		return false;
 	}
 }
