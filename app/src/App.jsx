@@ -60,8 +60,11 @@ function TankGauge({ tank }) {
 
 	const sensorFailed = !tank.sensor_ok || tank.distance_cm === null;
 	const percent = sensorFailed ? 0 : tank.percent;
-	const fillHeight = 132 * (percent / 100);
 	const tooClose = tank.too_close && !sensorFailed;
+	const confirmedPercent = tooClose ? tank.percent_min : percent;
+	const confirmedFillHeight = 132 * (confirmedPercent / 100);
+	const possibleFillHeight = tooClose ? 132 - confirmedFillHeight : 0;
+	const confirmedWaterTop = 146 - confirmedFillHeight;
 
 	return (
 		<div className="card tank-card">
@@ -72,6 +75,10 @@ function TankGauge({ tank }) {
 							<stop offset="0%" stopColor="#38bdf8" />
 							<stop offset="100%" stopColor="#0284c7" />
 						</linearGradient>
+						<linearGradient id="possible-water" x1="0" y1="0" x2="0" y2="1">
+							<stop offset="0%" stopColor="#38bdf8" stopOpacity="0.1" />
+							<stop offset="100%" stopColor="#38bdf8" stopOpacity="0.55" />
+						</linearGradient>
 						<clipPath id="tankShape">
 							<path d="M 20 14 L 100 14 L 91 146 L 29 146 Z" />
 						</clipPath>
@@ -81,14 +88,33 @@ function TankGauge({ tank }) {
 						className="tank-outline"
 					/>
 					<g clipPath="url(#tankShape)">
+						{tooClose && (
+							<rect
+								x="0"
+								y="14"
+								width="120"
+								height={possibleFillHeight}
+								fill="url(#possible-water)"
+								className="tank-possible-water"
+							/>
+						)}
 						<rect
 							x="0"
-							y={146 - fillHeight}
+							y={confirmedWaterTop}
 							width="120"
-							height={fillHeight}
+							height={confirmedFillHeight}
 							fill="url(#water)"
 							className="tank-water"
 						/>
+						{tooClose && (
+							<line
+								x1="20"
+								x2="100"
+								y1={confirmedWaterTop}
+								y2={confirmedWaterTop}
+								className="tank-minimum-level"
+							/>
+						)}
 					</g>
 				</svg>
 				<div className="tank-numbers">

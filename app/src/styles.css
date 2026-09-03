@@ -102,6 +102,16 @@ h2 {
 	transition: y 0.8s ease, height 0.8s ease;
 }
 
+.tank-possible-water {
+	transition: height 0.8s ease;
+}
+
+.tank-minimum-level {
+	stroke: #e0f2fe;
+	stroke-width: 1.5;
+	stroke-dasharray: 4 3;
+}
+
 .tank-numbers {
 	display: flex;
 	flex-direction: column;
