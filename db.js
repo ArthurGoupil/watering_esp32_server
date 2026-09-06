@@ -25,9 +25,10 @@ const TANK_RADIUS_BOTTOM_CM = 20.5;
 const TANK_RADIUS_TOP_CM = 27;
 // Distance capteur -> eau consideree comme "cuve pleine" (100 %).
 const FULL_DISTANCE_CM = 10;
-// En dessous de cette distance, la mesure ultrason n'est plus fiable
-// (zone morte du JSN-SR04T ~25 cm).
-const TOO_CLOSE_CM = 25;
+// The installed sensor has provided stable readings from 20 cm onward. Below
+// that distance, keep showing a minimum guaranteed tank level instead of a
+// falsely precise value.
+const TOO_CLOSE_CM = 20;
 
 // Volume d'eau (litres) pour une hauteur d'eau donnee (cm) dans le cone tronque.
 function volumeLitersForWaterHeight(waterHeightCm) {
