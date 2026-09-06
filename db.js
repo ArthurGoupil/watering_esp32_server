@@ -192,32 +192,37 @@ async function getWateringStatus() {
 
 // Disabling watering is transactional with cancelling the pending command.
 // Bumping request_id makes a command already fetched by the ESP32 stale.
+async function disableWateringInTransaction(client) {
+	const { rows } = await client.query(
+		"SELECT manual_watering_requested FROM commands WHERE id = 1 FOR UPDATE",
+	);
+	const hadPendingRequest = Boolean(rows[0]?.manual_watering_requested);
+	await client.query(
+		`UPDATE commands
+		 SET manual_watering_requested = false,
+		     requested_seconds = NULL,
+		     requested_at = NULL,
+		     request_id = request_id + CASE WHEN manual_watering_requested THEN 1 ELSE 0 END
+		 WHERE id = 1`,
+	);
+	const enabledResult = await client.query(
+		"SELECT value FROM settings WHERE key = 'watering_enabled' FOR UPDATE",
+	);
+	const alreadyDisabled = enabledResult.rows[0]?.value === "false";
+	await client.query(
+		`INSERT INTO settings (key, value) VALUES ('watering_enabled', 'false')
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+	);
+	return { alreadyDisabled, hadPendingRequest };
+}
+
 async function disableWatering() {
 	const client = await pool.connect();
 	try {
 		await client.query("BEGIN");
-		const { rows } = await client.query(
-			"SELECT manual_watering_requested FROM commands WHERE id = 1 FOR UPDATE",
-		);
-		const hadPendingRequest = Boolean(rows[0]?.manual_watering_requested);
-		await client.query(
-			`UPDATE commands
-			 SET manual_watering_requested = false,
-			     requested_seconds = NULL,
-			     requested_at = NULL,
-			     request_id = request_id + CASE WHEN manual_watering_requested THEN 1 ELSE 0 END
-			 WHERE id = 1`,
-		);
-		const enabledResult = await client.query(
-			"SELECT value FROM settings WHERE key = 'watering_enabled' FOR UPDATE",
-		);
-		const alreadyDisabled = enabledResult.rows[0]?.value === "false";
-		await client.query(
-			`INSERT INTO settings (key, value) VALUES ('watering_enabled', 'false')
-			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-		);
+		const result = await disableWateringInTransaction(client);
 		await client.query("COMMIT");
-		return { alreadyDisabled, hadPendingRequest };
+		return result;
 	} catch (err) {
 		await client.query("ROLLBACK");
 		throw err;
@@ -232,8 +237,8 @@ async function enableWatering() {
 }
 
 // Atomically decides whether a valid low-level measurement needs an alert.
-// A delivery ID prevents an older failed/successful send from changing state
-// after a newer measurement has re-armed or retried the alert.
+// `muted` remains in effect until a valid measurement above the threshold.
+// A delivery ID prevents an earlier alert from modifying a newer alert's state.
 async function evaluateLowTankLevel(tankLevel) {
 	if (!Number.isFinite(tankLevel) || tankLevel < 0) {
 		return { shouldAlert: false, rearmed: false };
@@ -253,14 +258,23 @@ async function evaluateLowTankLevel(tankLevel) {
 
 		if (tankLevel > 5) {
 			const rearmed = state !== "armed";
-			if (rearmed) {
-				await client.query(
-					`INSERT INTO settings (key, value) VALUES ('low_tank_alert_state', 'armed')
-					 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-				);
-			}
+			await client.query(
+				`INSERT INTO settings (key, value) VALUES ('low_tank_alert_state', 'armed')
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			);
+			// Invalidate every button previously delivered, including when a
+			// refill is observed while an alert request is still in flight.
+			await client.query(
+				`DELETE FROM settings
+				 WHERE key IN ('low_tank_alert_sending_at', 'low_tank_alert_delivery_id')`,
+			);
 			await client.query("COMMIT");
 			return { shouldAlert: false, rearmed };
+		}
+
+		if (state === "muted") {
+			await client.query("COMMIT");
+			return { shouldAlert: false, rearmed: false };
 		}
 
 		const sentAt = new Date(values.low_tank_alert_sending_at ?? 0);
@@ -312,8 +326,63 @@ async function completeLowTankAlertDelivery(deliveryId, sent) {
 				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 				[sent ? "sent" : "armed"],
 			);
+			if (!sent) {
+				await client.query(
+					`DELETE FROM settings
+					 WHERE key IN ('low_tank_alert_sending_at', 'low_tank_alert_delivery_id')`,
+				);
+			}
 		}
 		await client.query("COMMIT");
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
+// Applies a button action only while its exact Telegram delivery is still the
+// active low-tank alert. A refill or a newer delivery invalidates old buttons.
+async function respondToLowTankAlert(deliveryId, action) {
+	if (!["disable", "keep", "mute"].includes(action)) {
+		throw new Error("action alerte cuve basse invalide");
+	}
+
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		await client.query("SELECT pg_advisory_xact_lock($1)", [5172027]);
+		const { rows } = await client.query(
+			`SELECT key, value FROM settings
+			 WHERE key IN ('low_tank_alert_state', 'low_tank_alert_delivery_id')
+			 FOR UPDATE`,
+		);
+		const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+		const isCurrentAlert =
+			values.low_tank_alert_state === "sent" &&
+			values.low_tank_alert_delivery_id === deliveryId;
+		if (!isCurrentAlert) {
+			await client.query("COMMIT");
+			return { accepted: false };
+		}
+
+		let disableResult = null;
+		if (action === "disable") {
+			disableResult = await disableWateringInTransaction(client);
+		}
+
+		await client.query(
+			`INSERT INTO settings (key, value) VALUES ('low_tank_alert_state', $1)
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			[action === "mute" ? "muted" : "armed"],
+		);
+		await client.query(
+			`DELETE FROM settings
+			 WHERE key IN ('low_tank_alert_sending_at', 'low_tank_alert_delivery_id')`,
+		);
+		await client.query("COMMIT");
+		return { accepted: true, ...disableResult };
 	} catch (err) {
 		await client.query("ROLLBACK");
 		throw err;
@@ -739,6 +808,7 @@ module.exports = {
 	enableWatering,
 	evaluateLowTankLevel,
 	completeLowTankAlertDelivery,
+	respondToLowTankAlert,
 	setNextWake,
 	getNextWake,
 	getVacation,

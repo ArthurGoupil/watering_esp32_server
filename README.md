@@ -27,13 +27,20 @@ Serveur Node/Express du systeme d'arrosage ESP32 :
 ## Cuve basse et arrêt de sécurité
 
 À chaque mesure valide, un niveau inférieur ou égal à **5 %** déclenche une
-alerte Telegram une seule fois. L'alerte est de nouveau armée après une mesure
-strictement supérieure à 5 %. Ce réarmement ne réactive jamais l'arrosage.
+alerte Telegram. Les boutons associés à cette livraison précise sont :
 
-Le bouton Telegram **Oui** désactive les arrosages automatiques et
-exceptionnels, annule une demande manuelle en attente et invalide son
-`request_id`. Seul le bouton « Réactiver l'arrosage » de l'application React
-peut ensuite reprendre l'arrosage.
+- **Oui** : désactive les arrosages automatiques et exceptionnels, annule une
+  demande manuelle en attente et invalide son `request_id`. Seul le bouton
+  « Réactiver l'arrosage » de l'application React peut reprendre l'arrosage.
+- **Non** : maintient l'arrosage et réarme immédiatement l'alerte : chaque
+  nouvelle mesure valide à 5 % ou moins envoie une nouvelle alerte.
+- **Désactiver l'alerte** : maintient l'arrosage mais coupe uniquement les
+  alertes de cuve basse jusqu'à une mesure valide strictement supérieure à 5 %.
+  Ce réarmement ne réactive jamais l'arrosage.
+
+Chaque bouton contient un identifiant de livraison unique. Une ancienne alerte
+ne peut donc plus modifier l'état après un remplissage ou l'envoi d'une alerte
+plus récente.
 
 ## Mode vacances
 

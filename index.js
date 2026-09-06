@@ -85,15 +85,18 @@ async function handleTankMeasurement(m, endpoint) {
 		const sent = await sendTelegramMessage(
 			`⚠️ Réservoir presque vide : niveau mesuré ${m.tankLevel} %. ${
 				hasActionButtons
-					? "Souhaitez-vous désactiver l’arrosage ?"
+					? "Choisissez : Oui désactive l’arrosage ; Non le maintient et alertera à nouveau à la prochaine mesure basse ; Désactiver l’alerte maintient l’arrosage et coupe ces alertes jusqu’au remplissage."
 					: "Les boutons d’action Telegram ne sont pas configurés."
 			}`,
 			hasActionButtons
 				? {
 						inlineKeyboard: [
 							[
-								{ text: "Oui — désactiver l’arrosage", callback_data: "low_tank:disable" },
-								{ text: "Non — garder l’arrosage", callback_data: "low_tank:keep" },
+								{ text: "Oui", callback_data: `low_tank:disable:${decision.deliveryId}` },
+								{ text: "Non", callback_data: `low_tank:keep:${decision.deliveryId}` },
+							],
+							[
+								{ text: "Désactiver l’alerte", callback_data: `low_tank:mute:${decision.deliveryId}` },
 							],
 						],
 					}
@@ -399,8 +402,33 @@ app.post("/telegram/webhook", async (req, res) => {
 	}
 
 	try {
-		if (callback.data === "low_tank:disable") {
-			const result = await db.disableWatering();
+		const actionMatch = /^low_tank:(disable|keep|mute):([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(
+			String(callback.data),
+		);
+		if (!actionMatch) {
+			log(`/telegram/webhook -> callback inconnu ignore : ${String(callback.data)}`);
+			const answered = await answerCallbackQuery(callback.id, "Action inconnue.");
+			return answered
+				? res.status(200).json({ ok: true })
+				: res.status(502).json({ error: "reponse Telegram non envoyee" });
+		}
+
+		const [, action, deliveryId] = actionMatch;
+		const result = await db.respondToLowTankAlert(deliveryId, action);
+		if (!result.accepted) {
+			const answered = await answerCallbackQuery(
+				callback.id,
+				"Cette alerte n’est plus active.",
+			);
+			if (!answered) {
+				log("/telegram/webhook -> ECHEC answerCallbackQuery (alerte obsolete).");
+				return res.status(502).json({ error: "reponse Telegram non envoyee" });
+			}
+			log(`/telegram/webhook -> action obsolete ignoree (${action}).`);
+			return res.status(200).json({ ok: true, stale: true });
+		}
+
+		if (action === "disable") {
 			wateringDisabledInMemory = true;
 			log(
 				`/telegram/webhook -> arrosage desactive via Telegram${
@@ -422,24 +450,29 @@ app.post("/telegram/webhook", async (req, res) => {
 			return res.status(200).json({ ok: true });
 		}
 
-		if (callback.data === "low_tank:keep") {
+		if (action === "keep") {
 			const answered = await answerCallbackQuery(
 				callback.id,
-				"Arrosage maintenu.",
+				"Arrosage maintenu. La prochaine mesure basse declenchera une nouvelle alerte.",
 			);
 			if (!answered) {
 				log("/telegram/webhook -> ECHEC answerCallbackQuery.");
 				return res.status(502).json({ error: "reponse Telegram non envoyee" });
 			}
-			log("/telegram/webhook -> arrosage maintenu via Telegram.");
+			log("/telegram/webhook -> arrosage maintenu ; prochaine mesure basse alertera.");
 			return res.status(200).json({ ok: true });
 		}
 
-		log(`/telegram/webhook -> callback inconnu ignore : ${String(callback.data)}`);
-		const answered = await answerCallbackQuery(callback.id, "Action inconnue.");
-		return answered
-			? res.status(200).json({ ok: true })
-			: res.status(502).json({ error: "reponse Telegram non envoyee" });
+		const answered = await answerCallbackQuery(
+			callback.id,
+			"Alertes de cuve basse coupees jusqu’a une mesure superieure a 5 %. Arrosage maintenu.",
+		);
+		if (!answered) {
+			log("/telegram/webhook -> ECHEC answerCallbackQuery.");
+			return res.status(502).json({ error: "reponse Telegram non envoyee" });
+		}
+		log("/telegram/webhook -> alertes de cuve basse desactivees ; arrosage maintenu.");
+		return res.status(200).json({ ok: true });
 	} catch (err) {
 		log(`/telegram/webhook -> ERREUR : ${err.message}`);
 		return res.status(500).json({ error: "traitement du callback impossible" });
