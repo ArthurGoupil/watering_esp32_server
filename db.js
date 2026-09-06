@@ -28,7 +28,7 @@ const FULL_DISTANCE_CM = 10;
 // The installed sensor has provided stable readings from 20 cm onward. Below
 // that distance, keep showing a minimum guaranteed tank level instead of a
 // falsely precise value.
-const TOO_CLOSE_CM = 20;
+const TOO_CLOSE_CM = 20.7;
 
 // Volume d'eau (litres) pour une hauteur d'eau donnee (cm) dans le cone tronque.
 function volumeLitersForWaterHeight(waterHeightCm) {
