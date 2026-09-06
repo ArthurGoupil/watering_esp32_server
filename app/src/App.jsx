@@ -440,8 +440,9 @@ function ManualWateringCard({ manualWatering, wateringEnabled, onSaved }) {
 }
 
 /* --- Journaux de diagnostic ESP32 --- */
-function DiagnosticsCard({ diagnostics }) {
+function DiagnosticsCard({ diagnostics, preview = false, onViewMore }) {
 	const [expandedId, setExpandedId] = useState(null);
+	const displayedDiagnostics = preview ? diagnostics.slice(0, 3) : diagnostics;
 
 	if (diagnostics.length === 0) {
 		return (
@@ -462,7 +463,7 @@ function DiagnosticsCard({ diagnostics }) {
 				Derniers événements conservés par la carte avant son réveil.
 			</p>
 			<ul className="diagnostics">
-				{diagnostics.map((diagnostic) => (
+				{displayedDiagnostics.map((diagnostic) => (
 					<li key={diagnostic.id}>
 						<button
 							className="history-row"
@@ -501,14 +502,20 @@ function DiagnosticsCard({ diagnostics }) {
 					</li>
 				))}
 			</ul>
+			{preview && diagnostics.length > displayedDiagnostics.length && (
+				<button className="see-more" onClick={onViewMore}>
+					Voir tous les diagnostics
+				</button>
+			)}
 		</div>
 	);
 }
 
 /* --- Historique des arrosages --- */
-function History({ waterings, onDeleted }) {
+function History({ waterings, onDeleted, preview = false, onViewMore }) {
 	const [expandedId, setExpandedId] = useState(null);
 	const [deletingId, setDeletingId] = useState(null);
+	const displayedWaterings = preview ? waterings.slice(0, 3) : waterings;
 
 	const remove = async (w) => {
 		if (
@@ -551,7 +558,7 @@ function History({ waterings, onDeleted }) {
 		<div className="card">
 			<h2>Historique</h2>
 			<ul className="history">
-				{waterings.map((w) => (
+				{displayedWaterings.map((w) => (
 					<li key={w.id}>
 						<button
 							className="history-row"
@@ -604,7 +611,49 @@ function History({ waterings, onDeleted }) {
 					</li>
 				))}
 			</ul>
+			{preview && waterings.length > displayedWaterings.length && (
+				<button className="see-more" onClick={onViewMore}>
+					Voir tout l’historique
+				</button>
+			)}
 		</div>
+	);
+}
+
+function Navigation({ activeView, isOpen, onNavigate, onClose }) {
+	if (!isOpen) return null;
+
+	const entries = [
+		["home", "Accueil"],
+		["history", "Historique"],
+		["diagnostics", "Diagnostic ESP32"],
+	];
+
+	return (
+		<>
+			<button
+				className="menu-backdrop"
+				aria-label="Fermer le menu"
+				onClick={onClose}
+			/>
+			<nav className="mobile-menu" aria-label="Navigation principale">
+				<div className="mobile-menu-header">
+					<strong>Menu</strong>
+					<button className="menu-close" aria-label="Fermer le menu" onClick={onClose}>
+						×
+					</button>
+				</div>
+				{entries.map(([view, label]) => (
+					<button
+						key={view}
+						className={`menu-link ${activeView === view ? "active" : ""}`}
+						onClick={() => onNavigate(view)}
+					>
+						{label}
+					</button>
+				))}
+			</nav>
+		</>
 	);
 }
 
@@ -615,13 +664,15 @@ export default function App() {
 	const [diagnostics, setDiagnostics] = useState([]);
 	const [manualWatering, setManualWatering] = useState(null);
 	const [error, setError] = useState(null);
+	const [activeView, setActiveView] = useState("home");
+	const [menuOpen, setMenuOpen] = useState(false);
 
 	const refresh = async () => {
 		try {
 			const [s, w, d, m] = await Promise.all([
 				getStatus(),
-				getWaterings(),
-				getDeviceDiagnostics(),
+				getWaterings(200),
+				getDeviceDiagnostics(100),
 				getManualWatering(),
 			]);
 			setStatus(s);
@@ -661,28 +712,72 @@ export default function App() {
 		);
 	}
 
+	const navigate = (view) => {
+		setActiveView(view);
+		setMenuOpen(false);
+	};
+
+	const header = (
+		<header className="app-header">
+			<h1>💧 Arrosage</h1>
+			<button
+				className="menu-toggle"
+				aria-label="Ouvrir le menu"
+				aria-expanded={menuOpen}
+				onClick={() => setMenuOpen(true)}
+			>
+				<span aria-hidden="true">☰</span>
+			</button>
+		</header>
+	);
+
 	return (
 		<main className="app">
-			<h1>💧 Arrosage</h1>
-			<NextWakeInfo nextWake={status.next_wake} />
-			<TankGauge tank={status.tank} />
-			<WateringControl watering={status.watering} onSaved={refresh} />
-			<ManualWateringCard
-				manualWatering={manualWatering}
-				wateringEnabled={status.watering?.enabled !== false}
-				onSaved={refresh}
+			{header}
+			<Navigation
+				activeView={activeView}
+				isOpen={menuOpen}
+				onNavigate={navigate}
+				onClose={() => setMenuOpen(false)}
 			/>
-			<WateringSettings settings={status.settings} onSaved={refresh} />
-			<VacationCard
-				vacation={status.vacation ?? { active: false }}
-				flow={status.settings.flow_l_per_min}
-				onSaved={refresh}
-			/>
-			<History waterings={waterings} onDeleted={refresh} />
-			<DiagnosticsCard diagnostics={diagnostics} />
-			<p className="muted small footer">
-				Arrosage automatique chaque matin à 8h · mise à jour auto
-			</p>
+			{activeView === "home" ? (
+				<>
+					<NextWakeInfo nextWake={status.next_wake} />
+					<TankGauge tank={status.tank} />
+					<WateringControl watering={status.watering} onSaved={refresh} />
+					<ManualWateringCard
+						manualWatering={manualWatering}
+						wateringEnabled={status.watering?.enabled !== false}
+						onSaved={refresh}
+					/>
+					<WateringSettings settings={status.settings} onSaved={refresh} />
+					<VacationCard
+						vacation={status.vacation ?? { active: false }}
+						flow={status.settings.flow_l_per_min}
+						onSaved={refresh}
+					/>
+					<History
+						waterings={waterings}
+						onDeleted={refresh}
+						preview
+						onViewMore={() => navigate("history")}
+					/>
+					<DiagnosticsCard
+						diagnostics={diagnostics}
+						preview
+						onViewMore={() => navigate("diagnostics")}
+					/>
+				</>
+			) : activeView === "history" ? (
+				<History waterings={waterings} onDeleted={refresh} />
+			) : (
+				<DiagnosticsCard diagnostics={diagnostics} />
+			)}
+			{activeView === "home" && (
+				<p className="muted small footer">
+					Arrosage automatique chaque matin à 8h · mise à jour auto
+				</p>
+			)}
 		</main>
 	);
 }

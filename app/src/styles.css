@@ -37,6 +37,75 @@ h1 {
 	margin: 8px 0 0;
 }
 
+.app-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.menu-toggle,
+.menu-close {
+	width: auto;
+	margin: 0;
+	padding: 8px 12px;
+	background: transparent;
+	color: var(--text);
+	font-size: 1.55rem;
+	line-height: 1;
+}
+
+.menu-toggle:active,
+.menu-close:active {
+	background: rgba(148, 163, 184, 0.16);
+}
+
+.menu-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 10;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	border-radius: 0;
+	background: rgba(2, 6, 23, 0.65);
+}
+
+.mobile-menu {
+	position: fixed;
+	top: 0;
+	right: 0;
+	z-index: 11;
+	width: min(82vw, 320px);
+	height: 100%;
+	padding: max(20px, env(safe-area-inset-top)) 16px 16px;
+	background: var(--card);
+	border-left: 1px solid var(--card-border);
+	box-shadow: -12px 0 32px rgba(2, 6, 23, 0.45);
+}
+
+.mobile-menu-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 16px;
+	font-size: 1.2rem;
+}
+
+.menu-link {
+	width: 100%;
+	margin: 0 0 8px;
+	padding: 14px;
+	background: transparent;
+	color: var(--text);
+	text-align: left;
+}
+
+.menu-link.active {
+	background: rgba(56, 189, 248, 0.16);
+	color: var(--accent);
+}
+
 h2 {
 	font-size: 1.05rem;
 	margin: 0 0 12px;
@@ -313,6 +382,11 @@ input[type="range"] {
 
 .history-detail p {
 	margin: 4px 0;
+}
+
+.see-more {
+	margin-top: 14px;
+	background: var(--card-border);
 }
 
 .footer {
