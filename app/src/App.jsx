@@ -440,9 +440,10 @@ function ManualWateringCard({ manualWatering, wateringEnabled, onSaved }) {
 }
 
 /* --- Journaux de diagnostic ESP32 --- */
-function DiagnosticsCard({ diagnostics, preview = false, onViewMore }) {
+function DiagnosticsCard({ diagnostics }) {
 	const [expandedId, setExpandedId] = useState(null);
-	const displayedDiagnostics = preview ? diagnostics.slice(0, 3) : diagnostics;
+	const [visibleCount, setVisibleCount] = useState(20);
+	const displayedDiagnostics = diagnostics.slice(0, visibleCount);
 
 	if (diagnostics.length === 0) {
 		return (
@@ -502,9 +503,12 @@ function DiagnosticsCard({ diagnostics, preview = false, onViewMore }) {
 					</li>
 				))}
 			</ul>
-			{preview && diagnostics.length > displayedDiagnostics.length && (
-				<button className="see-more" onClick={onViewMore}>
-					Voir tous les diagnostics
+			{diagnostics.length > displayedDiagnostics.length && (
+				<button
+					className="see-more"
+					onClick={() => setVisibleCount((count) => count + 20)}
+				>
+					Voir plus de diagnostics
 				</button>
 			)}
 		</div>
@@ -512,10 +516,11 @@ function DiagnosticsCard({ diagnostics, preview = false, onViewMore }) {
 }
 
 /* --- Historique des arrosages --- */
-function History({ waterings, onDeleted, preview = false, onViewMore }) {
+function History({ waterings, onDeleted }) {
 	const [expandedId, setExpandedId] = useState(null);
 	const [deletingId, setDeletingId] = useState(null);
-	const displayedWaterings = preview ? waterings.slice(0, 3) : waterings;
+	const [visibleCount, setVisibleCount] = useState(20);
+	const displayedWaterings = waterings.slice(0, visibleCount);
 
 	const remove = async (w) => {
 		if (
@@ -611,9 +616,12 @@ function History({ waterings, onDeleted, preview = false, onViewMore }) {
 					</li>
 				))}
 			</ul>
-			{preview && waterings.length > displayedWaterings.length && (
-				<button className="see-more" onClick={onViewMore}>
-					Voir tout l’historique
+			{waterings.length > displayedWaterings.length && (
+				<button
+					className="see-more"
+					onClick={() => setVisibleCount((count) => count + 20)}
+				>
+					Voir plus d’arrosages
 				</button>
 			)}
 		</div>
@@ -621,7 +629,19 @@ function History({ waterings, onDeleted, preview = false, onViewMore }) {
 }
 
 function Navigation({ activeView, isOpen, onNavigate, onClose }) {
-	if (!isOpen) return null;
+	const [isRendered, setIsRendered] = useState(isOpen);
+
+	useEffect(() => {
+		if (isOpen) {
+			setIsRendered(true);
+			return undefined;
+		}
+
+		const timeout = setTimeout(() => setIsRendered(false), 180);
+		return () => clearTimeout(timeout);
+	}, [isOpen]);
+
+	if (!isRendered) return null;
 
 	const entries = [
 		["home", "Accueil"],
@@ -632,11 +652,14 @@ function Navigation({ activeView, isOpen, onNavigate, onClose }) {
 	return (
 		<>
 			<button
-				className="menu-backdrop"
+				className={`menu-backdrop ${isOpen ? "is-open" : ""}`}
 				aria-label="Fermer le menu"
 				onClick={onClose}
 			/>
-			<nav className="mobile-menu" aria-label="Navigation principale">
+			<nav
+				className={`mobile-menu ${isOpen ? "is-open" : ""}`}
+				aria-label="Navigation principale"
+			>
 				<div className="mobile-menu-header">
 					<strong>Menu</strong>
 					<button className="menu-close" aria-label="Fermer le menu" onClick={onClose}>
@@ -755,17 +778,6 @@ export default function App() {
 						vacation={status.vacation ?? { active: false }}
 						flow={status.settings.flow_l_per_min}
 						onSaved={refresh}
-					/>
-					<History
-						waterings={waterings}
-						onDeleted={refresh}
-						preview
-						onViewMore={() => navigate("history")}
-					/>
-					<DiagnosticsCard
-						diagnostics={diagnostics}
-						preview
-						onViewMore={() => navigate("diagnostics")}
 					/>
 				</>
 			) : activeView === "history" ? (
