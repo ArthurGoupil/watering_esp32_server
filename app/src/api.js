@@ -37,3 +37,9 @@ export const requestManualWatering = (seconds) =>
 	});
 export const cancelManualWatering = () =>
 	request("/api/manual-watering", { method: "DELETE" });
+export const enableWatering = () =>
+	request("/api/watering-enabled", {
+		method: "PUT",
+		headers: jsonHeaders,
+		body: JSON.stringify({ enabled: true }),
+	});

@@ -9,6 +9,7 @@
  */
 
 const { Pool } = require("pg");
+const { randomUUID } = require("crypto");
 
 const pool = new Pool({
 	connectionString: process.env.DATABASE_URL,
@@ -124,7 +125,11 @@ async function migrate() {
 		);
 
 		INSERT INTO settings (key, value)
-			VALUES ('daily_watering_seconds', '500'), ('flow_l_per_min', '1.26')
+			VALUES
+				('daily_watering_seconds', '500'),
+				('flow_l_per_min', '1.26'),
+				('watering_enabled', 'true'),
+				('low_tank_alert_state', 'armed')
 			ON CONFLICT (key) DO NOTHING;
 
 		INSERT INTO vacation (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
@@ -179,6 +184,144 @@ async function getRawSetting(key) {
 	return rows[0]?.value ?? null;
 }
 
+async function getWateringStatus() {
+	return {
+		enabled: (await getRawSetting("watering_enabled")) !== "false",
+	};
+}
+
+// Disabling watering is transactional with cancelling the pending command.
+// Bumping request_id makes a command already fetched by the ESP32 stale.
+async function disableWatering() {
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		const { rows } = await client.query(
+			"SELECT manual_watering_requested FROM commands WHERE id = 1 FOR UPDATE",
+		);
+		const hadPendingRequest = Boolean(rows[0]?.manual_watering_requested);
+		await client.query(
+			`UPDATE commands
+			 SET manual_watering_requested = false,
+			     requested_seconds = NULL,
+			     requested_at = NULL,
+			     request_id = request_id + CASE WHEN manual_watering_requested THEN 1 ELSE 0 END
+			 WHERE id = 1`,
+		);
+		const enabledResult = await client.query(
+			"SELECT value FROM settings WHERE key = 'watering_enabled' FOR UPDATE",
+		);
+		const alreadyDisabled = enabledResult.rows[0]?.value === "false";
+		await client.query(
+			`INSERT INTO settings (key, value) VALUES ('watering_enabled', 'false')
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		);
+		await client.query("COMMIT");
+		return { alreadyDisabled, hadPendingRequest };
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
+async function enableWatering() {
+	await setSetting("watering_enabled", "true");
+	return getWateringStatus();
+}
+
+// Atomically decides whether a valid low-level measurement needs an alert.
+// A delivery ID prevents an older failed/successful send from changing state
+// after a newer measurement has re-armed or retried the alert.
+async function evaluateLowTankLevel(tankLevel) {
+	if (!Number.isFinite(tankLevel) || tankLevel < 0) {
+		return { shouldAlert: false, rearmed: false };
+	}
+
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		await client.query("SELECT pg_advisory_xact_lock($1)", [5172027]);
+		const { rows } = await client.query(
+			`SELECT key, value FROM settings
+			 WHERE key IN ('low_tank_alert_state', 'low_tank_alert_sending_at')
+			 FOR UPDATE`,
+		);
+		const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+		const state = values.low_tank_alert_state ?? "armed";
+
+		if (tankLevel > 5) {
+			const rearmed = state !== "armed";
+			if (rearmed) {
+				await client.query(
+					`INSERT INTO settings (key, value) VALUES ('low_tank_alert_state', 'armed')
+					 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+				);
+			}
+			await client.query("COMMIT");
+			return { shouldAlert: false, rearmed };
+		}
+
+		const sentAt = new Date(values.low_tank_alert_sending_at ?? 0);
+		const sendingIsFresh =
+			state === "sending" &&
+			Number.isFinite(sentAt.getTime()) &&
+			Date.now() - sentAt.getTime() < 2 * 60 * 1000;
+		if (state === "sent" || sendingIsFresh) {
+			await client.query("COMMIT");
+			return { shouldAlert: false, rearmed: false };
+		}
+
+		const deliveryId = randomUUID();
+		await client.query(
+			`INSERT INTO settings (key, value) VALUES
+			 ('low_tank_alert_state', 'sending'),
+			 ('low_tank_alert_sending_at', $1),
+			 ('low_tank_alert_delivery_id', $2)
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			[new Date().toISOString(), deliveryId],
+		);
+		await client.query("COMMIT");
+		return { shouldAlert: true, deliveryId, rearmed: false };
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
+async function completeLowTankAlertDelivery(deliveryId, sent) {
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		await client.query("SELECT pg_advisory_xact_lock($1)", [5172027]);
+		const { rows } = await client.query(
+			`SELECT key, value FROM settings
+			 WHERE key IN ('low_tank_alert_state', 'low_tank_alert_delivery_id')
+			 FOR UPDATE`,
+		);
+		const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+		if (
+			values.low_tank_alert_state === "sending" &&
+			values.low_tank_alert_delivery_id === deliveryId
+		) {
+			await client.query(
+				`INSERT INTO settings (key, value) VALUES ('low_tank_alert_state', $1)
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+				[sent ? "sent" : "armed"],
+			);
+		}
+		await client.query("COMMIT");
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
 // --- Prochain reveil de l'ESP32 (rapporte par le firmware a chaque
 // endormissement, pour affichage dans l'app) ---
 async function setNextWake(seconds, fullCycle) {
@@ -227,7 +370,15 @@ function vacationDaysElapsed(vacation, today = localDate()) {
  * - Sinon : duree quotidienne definie dans les reglages.
  */
 async function computeWateringSeconds() {
-	const [settings, vacation] = await Promise.all([getSettings(), getVacation()]);
+	const [settings, vacation, watering] = await Promise.all([
+		getSettings(),
+		getVacation(),
+		getWateringStatus(),
+	]);
+
+	if (!watering.enabled) {
+		return { seconds: 0, source: "disabled" };
+	}
 
 	if (vacation.active && vacation.start_date && vacation.days > 0) {
 		const elapsed = vacationDaysElapsed(vacation);
@@ -255,13 +406,33 @@ async function getCommand() {
 }
 
 async function requestManualWatering(seconds) {
-	await pool.query(
-		`UPDATE commands SET manual_watering_requested = true,
-		 requested_seconds = $1, requested_at = now(),
-		 request_id = request_id + 1 WHERE id = 1`,
-		[seconds],
-	);
-	return getCommand();
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		await client.query("SELECT id FROM commands WHERE id = 1 FOR UPDATE");
+		const { rows } = await client.query(
+			"SELECT value FROM settings WHERE key = 'watering_enabled' FOR UPDATE",
+		);
+		if (rows[0]?.value === "false") {
+			const error = new Error("arrosage desactive");
+			error.code = "WATERING_DISABLED";
+			throw error;
+		}
+		const { rows: commandRows } = await client.query(
+			`UPDATE commands SET manual_watering_requested = true,
+			 requested_seconds = $1, requested_at = now(),
+			 request_id = request_id + 1 WHERE id = 1
+			 RETURNING *`,
+			[seconds],
+		);
+		await client.query("COMMIT");
+		return commandRows[0];
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
 }
 
 async function cancelManualWatering() {
@@ -299,11 +470,15 @@ async function recordManualWatering(requestId, seconds, measurementId, distanceC
 		}
 
 		const settingsResult = await client.query(
-			"SELECT key, value FROM settings",
+			"SELECT key, value FROM settings FOR UPDATE",
 		);
 		const map = Object.fromEntries(
 			settingsResult.rows.map((r) => [r.key, r.value]),
 		);
+		if (map.watering_enabled === "false") {
+			await client.query("ROLLBACK");
+			return { cancelled: true, disabled: true };
+		}
 		const flow = Number(map.flow_l_per_min ?? 1.26);
 		const interpretation = interpretDistance(distanceCm);
 
@@ -405,6 +580,13 @@ async function recordAutomaticWateringOnceToday(w) {
 	try {
 		await client.query("BEGIN");
 		await client.query("SELECT pg_advisory_xact_lock($1)", [5172026]);
+		const { rows: wateringRows } = await client.query(
+			"SELECT value FROM settings WHERE key = 'watering_enabled' FOR UPDATE",
+		);
+		if (wateringRows[0]?.value === "false") {
+			await client.query("COMMIT");
+			return { created: false, disabled: true };
+		}
 
 		const day = localDate();
 		const { rows: existing } = await client.query(
@@ -552,6 +734,11 @@ module.exports = {
 	getSettings,
 	setSetting,
 	getRawSetting,
+	getWateringStatus,
+	disableWatering,
+	enableWatering,
+	evaluateLowTankLevel,
+	completeLowTankAlertDelivery,
 	setNextWake,
 	getNextWake,
 	getVacation,

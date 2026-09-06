@@ -217,6 +217,16 @@ input[type="range"] {
 	border-color: var(--green);
 }
 
+.watering-disabled,
+.manual-watering-blocked {
+	border-color: rgba(248, 113, 113, 0.6);
+}
+
+.disabled-badge {
+	background: rgba(248, 113, 113, 0.15);
+	color: var(--red);
+}
+
 .badge {
 	background: rgba(74, 222, 128, 0.15);
 	color: var(--green);

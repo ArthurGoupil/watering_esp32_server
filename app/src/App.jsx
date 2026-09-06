@@ -9,6 +9,7 @@ import {
 	getManualWatering,
 	requestManualWatering,
 	cancelManualWatering,
+	enableWatering,
 } from "./api.js";
 
 const formatDate = (iso) =>
@@ -207,6 +208,43 @@ function WateringSettings({ settings, onSaved }) {
 	);
 }
 
+function WateringControl({ watering, onSaved }) {
+	const [busy, setBusy] = useState(false);
+	const enabled = watering?.enabled !== false;
+
+	const resume = async () => {
+		setBusy(true);
+		try {
+			await enableWatering();
+			onSaved();
+		} catch (err) {
+			alert(err.message);
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	if (enabled) return null;
+
+	return (
+		<div className="card watering-disabled">
+			<h2>
+				Arrosage désactivé <span className="badge disabled-badge">arrêté</span>
+			</h2>
+			<p>
+				L’arrosage automatique et les demandes exceptionnelles sont bloqués.
+			</p>
+			<p className="muted">
+				Cet arrêt a été demandé depuis Telegram. Même après le remplissage de
+				la cuve, il reste actif jusqu’à votre réactivation manuelle.
+			</p>
+			<button onClick={resume} disabled={busy}>
+				{busy ? "…" : "Réactiver l’arrosage"}
+			</button>
+		</div>
+	);
+}
+
 /* --- Mode vacances --- */
 function VacationCard({ vacation, flow, onSaved }) {
 	const active = vacation?.active;
@@ -311,11 +349,23 @@ function VacationCard({ vacation, flow, onSaved }) {
 }
 
 /* --- Arrosage exceptionnel (déclenché à distance) --- */
-function ManualWateringCard({ manualWatering, onSaved }) {
+function ManualWateringCard({ manualWatering, wateringEnabled, onSaved }) {
 	const [seconds, setSeconds] = useState(120);
 	const [busy, setBusy] = useState(false);
 
 	const pending = manualWatering?.requested;
+
+	if (!wateringEnabled) {
+		return (
+			<div className="card manual-watering-blocked">
+				<h2>Arrosage exceptionnel</h2>
+				<p className="muted">
+					Indisponible tant que l’arrosage est désactivé. Réactivez-le
+					d’abord avec le contrôle ci-dessus.
+				</p>
+			</div>
+		);
+	}
 
 	const trigger = async () => {
 		setBusy(true);
@@ -616,7 +666,12 @@ export default function App() {
 			<h1>💧 Arrosage</h1>
 			<NextWakeInfo nextWake={status.next_wake} />
 			<TankGauge tank={status.tank} />
-			<ManualWateringCard manualWatering={manualWatering} onSaved={refresh} />
+			<WateringControl watering={status.watering} onSaved={refresh} />
+			<ManualWateringCard
+				manualWatering={manualWatering}
+				wateringEnabled={status.watering?.enabled !== false}
+				onSaved={refresh}
+			/>
 			<WateringSettings settings={status.settings} onSaved={refresh} />
 			<VacationCard
 				vacation={status.vacation ?? { active: false }}

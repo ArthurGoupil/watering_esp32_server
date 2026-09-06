@@ -26,8 +26,17 @@
 
 const express = require("express");
 const path = require("path");
+const { timingSafeEqual } = require("crypto");
 const db = require("./db");
-const { sendTelegramMessage, enabled: telegramEnabled } = require("./telegram");
+const {
+	sendTelegramMessage,
+	answerCallbackQuery,
+	registerWebhook,
+	enabled: telegramEnabled,
+	actionButtonsConfigured,
+	chatId: telegramChatId,
+	webhookSecret: telegramWebhookSecret,
+} = require("./telegram");
 
 const PORT = process.env.PORT || 3000;
 const FALLBACK_WATERING_SECONDS = 500;
@@ -40,9 +49,71 @@ const MISSED_WATERING_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
 const app = express();
 app.use(express.json());
+let telegramActionButtonsEnabled = false;
+let wateringDisabledInMemory = false;
 
 function log(...args) {
 	console.log(`[${new Date().toISOString()}]`, ...args);
+}
+
+function webhookSecretMatches(receivedSecret) {
+	if (
+		typeof receivedSecret !== "string" ||
+		typeof telegramWebhookSecret !== "string"
+	) {
+		return false;
+	}
+	const received = Buffer.from(receivedSecret);
+	const expected = Buffer.from(telegramWebhookSecret);
+	return (
+		received.length === expected.length &&
+		timingSafeEqual(received, expected)
+	);
+}
+
+async function handleTankMeasurement(m, endpoint) {
+	try {
+		const decision = await db.evaluateLowTankLevel(m.tankLevel);
+		if (decision.rearmed) {
+			log(
+				`${endpoint} -> cuve refaite au-dessus de 5 % : alerte de niveau bas rearmee`,
+			);
+		}
+		if (!decision.shouldAlert) return;
+
+		const hasActionButtons = telegramActionButtonsEnabled;
+		const sent = await sendTelegramMessage(
+			`⚠️ Réservoir presque vide : niveau mesuré ${m.tankLevel} %. ${
+				hasActionButtons
+					? "Souhaitez-vous désactiver l’arrosage ?"
+					: "Les boutons d’action Telegram ne sont pas configurés."
+			}`,
+			hasActionButtons
+				? {
+						inlineKeyboard: [
+							[
+								{ text: "Oui — désactiver l’arrosage", callback_data: "low_tank:disable" },
+								{ text: "Non — garder l’arrosage", callback_data: "low_tank:keep" },
+							],
+						],
+					}
+				: undefined,
+		);
+		await db.completeLowTankAlertDelivery(decision.deliveryId, sent);
+		if (sent) {
+			log(
+				`${endpoint} -> alerte Telegram de cuve <= 5 % envoyee${
+					hasActionButtons ? " avec boutons d’action" : ""
+				}`,
+			);
+		} else {
+			log(
+				`${endpoint} -> ECHEC alerte Telegram de cuve <= 5 % : nouvelle tentative a la prochaine mesure`,
+			);
+		}
+	} catch (err) {
+		log(`${endpoint} -> ERREUR traitement alerte niveau bas : ${err.message}`);
+	}
 }
 
 // --- Lecture des parametres envoyes par l'ESP32 ---
@@ -51,7 +122,7 @@ function parseEsp32Query(query) {
 		const raw = query[name];
 		if (raw === undefined || raw === null || raw === "") return null;
 		const value = Number(raw);
-		return Number.isNaN(value) ? null : value;
+		return Number.isFinite(value) ? value : null;
 	};
 	return {
 		tankLevel: num("tank_level"),
@@ -103,6 +174,7 @@ app.get(["/init", "/water"], async (req, res) => {
 	}
 
 	logMeasurement(endpoint, m);
+	await handleTankMeasurement(m, endpoint);
 
 	let measurementId = null;
 	try {
@@ -116,14 +188,18 @@ app.get(["/init", "/water"], async (req, res) => {
 	}
 
 	// Duree d'arrosage du jour : reglages ou mode vacances.
-	let seconds = FALLBACK_WATERING_SECONDS;
-	let source = "fallback";
+	let seconds = wateringDisabledInMemory ? 0 : FALLBACK_WATERING_SECONDS;
+	let source = wateringDisabledInMemory ? "disabled" : "fallback";
 	try {
 		const decision = await db.computeWateringSeconds();
 		seconds = decision.seconds;
 		source = decision.source;
 	} catch (err) {
-		log(`/water  -> ERREUR DB (duree de secours ${FALLBACK_WATERING_SECONDS}s utilisee) : ${err.message}`);
+		log(
+			wateringDisabledInMemory
+				? `/water  -> ERREUR DB, pompe maintenue bloquee : ${err.message}`
+				: `/water  -> ERREUR DB (duree de secours ${FALLBACK_WATERING_SECONDS}s utilisee) : ${err.message}`,
+		);
 	}
 
 	log(`/water  -> duree d'arrosage renvoyee = ${seconds}s (source : ${source})`);
@@ -150,10 +226,12 @@ app.get(["/init", "/water"], async (req, res) => {
 			});
 			if (!result.created) {
 				log(
-					`/water  -> arrosage automatique deja enregistre aujourd'hui (id=${result.id}) : 0s renvoye`,
+					result.disabled
+						? "/water  -> arrosage automatique bloque : arrosage desactive"
+						: `/water  -> arrosage automatique deja enregistre aujourd'hui (id=${result.id}) : 0s renvoye`,
 				);
 				seconds = 0;
-				source = "duplicate";
+				source = result.disabled ? "disabled" : "duplicate";
 			}
 		}
 		if (
@@ -185,11 +263,16 @@ app.get(["/init", "/water"], async (req, res) => {
 // demande depuis l'app. ---
 app.get("/command", async (req, res) => {
 	try {
-		const command = await db.getCommand();
+		const [command, watering] = await Promise.all([
+			db.getCommand(),
+			db.getWateringStatus(),
+		]);
 		res.json({
-			watering_requested: Boolean(command.manual_watering_requested),
-			requested_seconds: command.requested_seconds,
+			watering_requested:
+				watering.enabled && Boolean(command.manual_watering_requested),
+			requested_seconds: watering.enabled ? command.requested_seconds : null,
 			request_id: command.request_id,
+			watering_enabled: watering.enabled,
 		});
 	} catch (err) {
 		res.status(500).json({ error: err.message });
@@ -218,6 +301,7 @@ app.get("/manual-water", async (req, res) => {
 	}
 
 	logMeasurement("/manual-water", m);
+	await handleTankMeasurement(m, "/manual-water");
 
 	let measurementId = null;
 	try {
@@ -230,8 +314,17 @@ app.get("/manual-water", async (req, res) => {
 			m.rawDistanceCm,
 		);
 		if (result.cancelled) {
-			log(`/manual-water  -> commande annulee/remplacee (request_id=${requestId}) : pompe non activee`);
-			return res.json({ ok: false, cancelled: true, watering_seconds: 0 });
+			log(
+				`/manual-water  -> commande ${
+					result.disabled ? "bloquee (arrosage desactive)" : "annulee/remplacee"
+				} (request_id=${requestId}) : pompe non activee`,
+			);
+			return res.json({
+				ok: false,
+				cancelled: true,
+				disabled: Boolean(result.disabled),
+				watering_seconds: 0,
+			});
 		}
 
 		if (m.rawDistanceCm !== null && m.rawDistanceCm >= 0) {
@@ -281,6 +374,75 @@ app.get("/manual-water/done", async (req, res) => {
 	} catch (err) {
 		log(`/manual-water/done  -> ERREUR : ${err.message}`);
 		res.status(500).json({ error: err.message });
+	}
+});
+
+// Telegram delivers button presses as HTTPS webhooks. The shared secret is
+// mandatory so only Telegram requests registered by this process are trusted.
+app.post("/telegram/webhook", async (req, res) => {
+	if (!telegramActionButtonsEnabled) {
+		log("/telegram/webhook -> refuse : boutons Telegram indisponibles.");
+		return res.status(503).json({ error: "webhook Telegram indisponible" });
+	}
+	if (!webhookSecretMatches(req.get("X-Telegram-Bot-Api-Secret-Token"))) {
+		log("/telegram/webhook -> refuse : secret Telegram invalide.");
+		return res.status(403).json({ error: "secret Telegram invalide" });
+	}
+
+	const callback = req.body?.callback_query;
+	if (!callback) {
+		return res.status(204).end();
+	}
+	if (String(callback.message?.chat?.id) !== String(telegramChatId)) {
+		log("/telegram/webhook -> refuse : chat Telegram non autorise.");
+		return res.status(403).json({ error: "chat Telegram non autorise" });
+	}
+
+	try {
+		if (callback.data === "low_tank:disable") {
+			const result = await db.disableWatering();
+			wateringDisabledInMemory = true;
+			log(
+				`/telegram/webhook -> arrosage desactive via Telegram${
+					result.hadPendingRequest
+						? " ; demande manuelle en attente annulee"
+						: ""
+				}`,
+			);
+			const answered = await answerCallbackQuery(
+				callback.id,
+				result.alreadyDisabled
+					? "L’arrosage est déjà désactivé."
+					: "Arrosage désactivé. Réactivez-le manuellement dans l’application.",
+			);
+			if (!answered) {
+				log("/telegram/webhook -> ECHEC answerCallbackQuery (action deja enregistree).");
+				return res.status(502).json({ error: "reponse Telegram non envoyee" });
+			}
+			return res.status(200).json({ ok: true });
+		}
+
+		if (callback.data === "low_tank:keep") {
+			const answered = await answerCallbackQuery(
+				callback.id,
+				"Arrosage maintenu.",
+			);
+			if (!answered) {
+				log("/telegram/webhook -> ECHEC answerCallbackQuery.");
+				return res.status(502).json({ error: "reponse Telegram non envoyee" });
+			}
+			log("/telegram/webhook -> arrosage maintenu via Telegram.");
+			return res.status(200).json({ ok: true });
+		}
+
+		log(`/telegram/webhook -> callback inconnu ignore : ${String(callback.data)}`);
+		const answered = await answerCallbackQuery(callback.id, "Action inconnue.");
+		return answered
+			? res.status(200).json({ ok: true })
+			: res.status(502).json({ error: "reponse Telegram non envoyee" });
+	} catch (err) {
+		log(`/telegram/webhook -> ERREUR : ${err.message}`);
+		return res.status(500).json({ error: "traitement du callback impossible" });
 	}
 });
 
@@ -338,11 +500,12 @@ app.post("/device-diagnostics", async (req, res) => {
 // --- API de l'application ---
 app.get("/api/status", async (req, res) => {
 	try {
-		const [measurement, settings, vacation, nextWake] = await Promise.all([
+		const [measurement, settings, vacation, nextWake, watering] = await Promise.all([
 			db.latestMeasurement(),
 			db.getSettings(),
 			db.getVacation(),
 			db.getNextWake(),
+			db.getWateringStatus(),
 		]);
 
 		let tank = null;
@@ -378,7 +541,13 @@ app.get("/api/status", async (req, res) => {
 			};
 		}
 
-		res.json({ tank, settings, vacation: vacationStatus, next_wake: nextWake });
+		res.json({
+			tank,
+			settings,
+			vacation: vacationStatus,
+			next_wake: nextWake,
+			watering,
+		});
 	} catch (err) {
 		res.status(500).json({ error: err.message });
 	}
@@ -516,13 +685,32 @@ app.put("/api/vacation", async (req, res) => {
 	}
 });
 
+app.put("/api/watering-enabled", async (req, res) => {
+	if (req.body?.enabled !== true) {
+		return res.status(400).json({ error: "enabled doit etre true" });
+	}
+	try {
+		const watering = await db.enableWatering();
+		wateringDisabledInMemory = false;
+		log("/api/watering-enabled -> arrosage reactive manuellement depuis l'app.");
+		res.json(watering);
+	} catch (err) {
+		log(`/api/watering-enabled -> ERREUR DB : ${err.message}`);
+		res.status(500).json({ error: err.message });
+	}
+});
+
 app.get("/api/manual-watering", async (req, res) => {
 	try {
-		const command = await db.getCommand();
+		const [command, watering] = await Promise.all([
+			db.getCommand(),
+			db.getWateringStatus(),
+		]);
 		res.json({
-			requested: Boolean(command.manual_watering_requested),
-			requested_seconds: command.requested_seconds,
-			requested_at: command.requested_at,
+			requested: watering.enabled && Boolean(command.manual_watering_requested),
+			requested_seconds: watering.enabled ? command.requested_seconds : null,
+			requested_at: watering.enabled ? command.requested_at : null,
+			watering_enabled: watering.enabled,
 		});
 	} catch (err) {
 		res.status(500).json({ error: err.message });
@@ -545,6 +733,11 @@ app.put("/api/manual-watering", async (req, res) => {
 			requested_at: command.requested_at,
 		});
 	} catch (err) {
+		if (err.code === "WATERING_DISABLED") {
+			return res.status(409).json({
+				error: "L'arrosage est désactivé. Réactivez-le d'abord dans l'application.",
+			});
+		}
 		res.status(500).json({ error: err.message });
 	}
 });
@@ -597,6 +790,8 @@ async function checkMissedWatering() {
 		const lastAlertDate = await db.getRawSetting("last_missed_alert_date");
 		if (lastAlertDate === today) return; // deja alerte aujourd'hui
 
+		if (!(await db.getWateringStatus()).enabled) return;
+
 		const checkedIn = await db.hasWaterCheckinToday();
 		if (checkedIn) return;
 
@@ -622,6 +817,7 @@ async function start() {
 	} else {
 		try {
 			await db.migrate();
+			wateringDisabledInMemory = !(await db.getWateringStatus()).enabled;
 			log("Base de donnees prete (migration OK).");
 		} catch (err) {
 			log(`ERREUR migration DB : ${err.message}`);
@@ -632,6 +828,25 @@ async function start() {
 		log("Notifications Telegram desactivees (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID absents).");
 	} else {
 		setInterval(checkMissedWatering, MISSED_WATERING_CHECK_INTERVAL_MS);
+	}
+
+	if (!process.env.TELEGRAM_WEBHOOK_URL || !process.env.TELEGRAM_WEBHOOK_SECRET) {
+		log(
+			"Boutons d’action Telegram pour cuve basse indisponibles : TELEGRAM_WEBHOOK_URL et TELEGRAM_WEBHOOK_SECRET sont requis.",
+		);
+	} else if (!actionButtonsConfigured) {
+		log(
+			"Boutons d’action Telegram pour cuve basse indisponibles : TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID sont aussi requis.",
+		);
+	} else {
+		telegramActionButtonsEnabled = await registerWebhook();
+		if (telegramActionButtonsEnabled) {
+			log("Webhook Telegram enregistre pour les callbacks des boutons de cuve basse.");
+		} else {
+			log(
+				"Boutons d’action Telegram pour cuve basse indisponibles : echec d’enregistrement du webhook.",
+			);
+		}
 	}
 
 	app.listen(PORT, () => {
