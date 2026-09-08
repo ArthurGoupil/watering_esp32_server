@@ -236,7 +236,7 @@ function FrostAlertSettings({ settings, onSaved }) {
 				alerte si une température minimale est inférieure à 5 °C.
 			</p>
 			<button
-				className={enabled ? "danger" : "success"}
+				className={`frost-alert-toggle ${enabled ? "danger" : "success"}`}
 				onClick={toggle}
 				disabled={saving}
 			>
