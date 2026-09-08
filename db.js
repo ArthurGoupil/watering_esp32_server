@@ -205,6 +205,7 @@ async function recordWeatherSnapshot(forecastDays) {
 		await client.query("BEGIN");
 		for (const [key, value] of [
 			["weather_checked_at", new Date().toISOString()],
+			["weather_today_date", today.date],
 			["weather_today_precipitation_mm", today.precipitationMm],
 			["weather_min_temperature_7_days_c", coldestDay.temperatureMin],
 			["weather_min_temperature_7_days_date", coldestDay.date],
@@ -227,17 +228,20 @@ async function recordWeatherSnapshot(forecastDays) {
 async function getWeatherStatus() {
 	const [
 		checkedAt,
+		todayDate,
 		precipitationMm,
 		minimumTemperature,
 		minimumTemperatureDate,
 	] = await Promise.all([
 		getRawSetting("weather_checked_at"),
+		getRawSetting("weather_today_date"),
 		getRawSetting("weather_today_precipitation_mm"),
 		getRawSetting("weather_min_temperature_7_days_c"),
 		getRawSetting("weather_min_temperature_7_days_date"),
 	]);
 	if (
 		!checkedAt ||
+		!todayDate ||
 		precipitationMm === null ||
 		minimumTemperature === null ||
 		!minimumTemperatureDate
@@ -246,6 +250,7 @@ async function getWeatherStatus() {
 	}
 	return {
 		checked_at: checkedAt,
+		today_date: todayDate,
 		precipitation_mm: Number(precipitationMm),
 		min_temperature_7_days_c: Number(minimumTemperature),
 		min_temperature_7_days_date: minimumTemperatureDate,

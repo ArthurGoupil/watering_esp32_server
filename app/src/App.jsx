@@ -25,6 +25,11 @@ const formatTime = (iso) =>
 		minute: "2-digit",
 	});
 
+const formatNumericDate = (date) => {
+	const [year, month, day] = date.split("-");
+	return `${day}-${month}-${year}`;
+};
+
 const formatDuration = (seconds) => {
 	if (seconds < 60) return `${seconds} s`;
 	const min = Math.floor(seconds / 60);
@@ -230,16 +235,17 @@ function FrostAlertSettings({ settings, weather, onSaved }) {
 
 	return (
 		<div className="card">
-			<h2>Alerte gel</h2>
+			<h2>Météo</h2>
 			{weather ? (
 				<div className="weather-summary">
 					<p>
-						Pluviométrie du jour : <strong>{weather.precipitation_mm} mm</strong>
+						Pluviométrie du {formatNumericDate(weather.today_date)} :{" "}
+						<strong>{weather.precipitation_mm} mm</strong>
 					</p>
 					<p>
-						Minimum sur 7 jours :{" "}
-						<strong>{weather.min_temperature_7_days_c} °C</strong> (
-						{weather.min_temperature_7_days_date})
+						Température minimale prévue sur 7 jours :{" "}
+						<strong>{weather.min_temperature_7_days_c} °C</strong>, le{" "}
+						{formatNumericDate(weather.min_temperature_7_days_date)}
 					</p>
 					<p className="muted small">
 						Mise à jour : {formatDate(weather.checked_at)} à{" "}
@@ -253,8 +259,9 @@ function FrostAlertSettings({ settings, weather, onSaved }) {
 				</p>
 			)}
 			<p className="muted">
-				Chaque soir, vérifie les 7 prochains jours à Saint-Ouen-sur-Seine et
-				alerte si une température minimale est inférieure à 5 °C.
+				Alerte gel : vérification chaque soir des 7 prochains jours à
+				Saint-Ouen-sur-Seine si une température minimale est inférieure à
+				5 °C.
 			</p>
 			<button
 				className={`frost-alert-toggle ${enabled ? "danger" : "success"}`}
