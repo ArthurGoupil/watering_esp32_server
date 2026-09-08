@@ -26,7 +26,7 @@
 
 const express = require("express");
 const path = require("path");
-const { timingSafeEqual } = require("crypto");
+const { randomUUID, timingSafeEqual } = require("crypto");
 const db = require("./db");
 const {
 	sendTelegramMessage,
@@ -46,6 +46,11 @@ const FALLBACK_WATERING_SECONDS = 500;
 const WATERING_HOUR = 8;
 const MISSED_WATERING_GRACE_MINUTES = 45;
 const MISSED_WATERING_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const WEATHER_CHECK_HOUR = 20;
+const WEATHER_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const RAIN_THRESHOLD_MM = 6;
+const SAINT_OUEN_LATITUDE = 48.911;
+const SAINT_OUEN_LONGITUDE = 2.334;
 
 const app = express();
 app.use(express.json());
@@ -69,6 +74,131 @@ function webhookSecretMatches(receivedSecret) {
 		received.length === expected.length &&
 		timingSafeEqual(received, expected)
 	);
+}
+
+function parisTimeNow() {
+	return new Date(
+		new Date().toLocaleString("en-US", { timeZone: "Europe/Paris" }),
+	);
+}
+
+async function getWeatherForecast() {
+	const url = new URL("https://api.open-meteo.com/v1/forecast");
+	url.search = new URLSearchParams({
+		latitude: String(SAINT_OUEN_LATITUDE),
+		longitude: String(SAINT_OUEN_LONGITUDE),
+		daily: "temperature_2m_min,precipitation_sum",
+		forecast_days: "7",
+		timezone: "Europe/Paris",
+	}).toString();
+
+	const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+	if (!response.ok) {
+		throw new Error(`Open-Meteo HTTP ${response.status}`);
+	}
+	const data = await response.json();
+	const { time, temperature_2m_min: minimums, precipitation_sum: precipitation } =
+		data.daily ?? {};
+	if (
+		!Array.isArray(time) ||
+		!Array.isArray(minimums) ||
+		!Array.isArray(precipitation) ||
+		time.length === 0 ||
+		time.length !== minimums.length ||
+		time.length !== precipitation.length
+	) {
+		throw new Error("reponse Open-Meteo quotidienne invalide");
+	}
+
+	return time.map((date, index) => {
+		const temperatureMin = Number(minimums[index]);
+		const precipitationMm = Number(precipitation[index]);
+		if (!Number.isFinite(temperatureMin) || !Number.isFinite(precipitationMm)) {
+			throw new Error("valeur meteorologique invalide");
+		}
+		return { date, temperatureMin, precipitationMm };
+	});
+}
+
+async function checkWeatherAlerts() {
+	if (!telegramEnabled || parisTimeNow().getHours() < WEATHER_CHECK_HOUR) return;
+
+	try {
+		const forecast = await getWeatherForecast();
+		const frostDecision = await db.evaluateFrostAlert(forecast);
+		if (frostDecision.rearmed) {
+			log("checkWeatherAlerts -> alertes gel rearmees : previsions toutes >= 5 C.");
+		}
+		if (frostDecision.shouldAlert) {
+			const coldestDay = forecast.reduce((coldest, day) =>
+				day.temperatureMin < coldest.temperatureMin ? day : coldest,
+			);
+			const sent = await sendTelegramMessage(
+				`❄️ Risque de froid : ${coldestDay.temperatureMin} °C minimum prévu le ${coldestDay.date} à Saint-Ouen-sur-Seine. Débranchez la batterie LiFePO4 si nécessaire.`,
+				telegramActionButtonsEnabled
+					? {
+							inlineKeyboard: [
+								[
+									{
+										text: "Me le rappeler demain",
+										callback_data: `frost:tomorrow:${frostDecision.deliveryId}`,
+									},
+								],
+								[
+									{
+										text: "Masquer jusqu’au retour au chaud",
+										callback_data: `frost:until_safe:${frostDecision.deliveryId}`,
+									},
+								],
+							],
+						}
+					: undefined,
+			);
+			await db.completeFrostAlertDelivery(frostDecision.deliveryId, sent);
+			log(
+				sent
+					? `checkWeatherAlerts -> alerte gel envoyee (${coldestDay.temperatureMin} C le ${coldestDay.date}).`
+					: "checkWeatherAlerts -> ECHEC envoi alerte gel, nouvelle tentative au prochain controle.",
+			);
+		}
+
+		const today = db.localDate();
+		const todayForecast = forecast.find((day) => day.date === today);
+		if (
+			todayForecast &&
+			todayForecast.precipitationMm >= RAIN_THRESHOLD_MM &&
+			(await db.getRawSetting("last_rain_alert_date")) !== today
+		) {
+			const deliveryId = randomUUID();
+			const sent = await sendTelegramMessage(
+				`🌧️ Environ ${todayForecast.precipitationMm} mm de pluie aujourd’hui à Saint-Ouen-sur-Seine. Maintenir l’arrosage automatique de demain ?`,
+				telegramActionButtonsEnabled
+					? {
+							inlineKeyboard: [
+								[
+									{ text: "Oui, maintenir", callback_data: `rain:keep:${deliveryId}` },
+									{ text: "Non, annuler demain", callback_data: `rain:skip:${deliveryId}` },
+								],
+							],
+						}
+					: undefined,
+			);
+			if (sent) {
+				await Promise.all([
+					db.setSetting("last_rain_alert_date", today),
+					db.setSetting("rain_alert_date", today),
+					db.setSetting("rain_alert_delivery_id", deliveryId),
+				]);
+			}
+			log(
+				sent
+					? `checkWeatherAlerts -> alerte pluie envoyee (${todayForecast.precipitationMm} mm).`
+					: "checkWeatherAlerts -> ECHEC envoi alerte pluie, nouvelle tentative au prochain controle.",
+			);
+		}
+	} catch (err) {
+		log(`checkWeatherAlerts -> ERREUR : ${err.message}`);
+	}
 }
 
 async function handleTankMeasurement(m, endpoint) {
@@ -405,12 +535,52 @@ app.post("/telegram/webhook", async (req, res) => {
 		const actionMatch = /^low_tank:(disable|keep|mute):([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(
 			String(callback.data),
 		);
-		if (!actionMatch) {
+		const frostMatch = /^frost:(tomorrow|until_safe):([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(
+			String(callback.data),
+		);
+		const rainMatch = /^rain:(keep|skip):([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(
+			String(callback.data),
+		);
+		if (!actionMatch && !frostMatch && !rainMatch) {
 			log(`/telegram/webhook -> callback inconnu ignore : ${String(callback.data)}`);
 			const answered = await answerCallbackQuery(callback.id, "Action inconnue.");
 			return answered
 				? res.status(200).json({ ok: true })
 				: res.status(502).json({ error: "reponse Telegram non envoyee" });
+		}
+
+		if (frostMatch) {
+			const [, action, deliveryId] = frostMatch;
+			const result = await db.respondToFrostAlert(deliveryId, action);
+			const message = !result.accepted
+				? "Cette alerte n’est plus active."
+				: action === "tomorrow"
+					? "D’accord, rappel demain soir si le risque persiste."
+					: "Alertes masquees jusqu’a ce que toute la prevision repasse a 5 °C ou plus.";
+			const answered = await answerCallbackQuery(callback.id, message);
+			if (!answered) {
+				log("/telegram/webhook -> ECHEC answerCallbackQuery (alerte gel).");
+				return res.status(502).json({ error: "reponse Telegram non envoyee" });
+			}
+			log(`/telegram/webhook -> action gel ${action} ${result.accepted ? "acceptee" : "obsolete"}.`);
+			return res.status(200).json({ ok: true, stale: !result.accepted });
+		}
+
+		if (rainMatch) {
+			const [, action, deliveryId] = rainMatch;
+			const result = await db.respondToRainAlert(deliveryId, action);
+			const message = !result.accepted
+				? "Cette alerte n’est plus active."
+				: action === "skip"
+					? "Arrosage automatique de demain annule."
+					: "Arrosage automatique de demain maintenu.";
+			const answered = await answerCallbackQuery(callback.id, message);
+			if (!answered) {
+				log("/telegram/webhook -> ECHEC answerCallbackQuery (alerte pluie).");
+				return res.status(502).json({ error: "reponse Telegram non envoyee" });
+			}
+			log(`/telegram/webhook -> action pluie ${action} ${result.accepted ? "acceptee" : "obsolete"}.`);
+			return res.status(200).json({ ok: true, stale: !result.accepted });
 		}
 
 		const [, action, deliveryId] = actionMatch;
@@ -657,6 +827,12 @@ app.put("/api/settings", async (req, res) => {
 			}
 			await db.setSetting("flow_l_per_min", flow);
 		}
+		if (req.body.frost_alert_enabled !== undefined) {
+			if (typeof req.body.frost_alert_enabled !== "boolean") {
+				return res.status(400).json({ error: "frost_alert_enabled doit etre un booleen" });
+			}
+			await db.setSetting("frost_alert_enabled", req.body.frost_alert_enabled);
+		}
 		log(`/api/settings  -> reglages mis a jour : ${JSON.stringify(req.body)}`);
 		res.json(await db.getSettings());
 	} catch (err) {
@@ -861,6 +1037,8 @@ async function start() {
 		log("Notifications Telegram desactivees (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID absents).");
 	} else {
 		setInterval(checkMissedWatering, MISSED_WATERING_CHECK_INTERVAL_MS);
+		setInterval(checkWeatherAlerts, WEATHER_CHECK_INTERVAL_MS);
+		checkWeatherAlerts();
 	}
 
 	if (!process.env.TELEGRAM_WEBHOOK_URL || !process.env.TELEGRAM_WEBHOOK_SECRET) {

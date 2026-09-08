@@ -19,7 +19,8 @@ Serveur Node/Express du systeme d'arrosage ESP32 :
 
 - `GET /api/status` : derniere mesure (pourcentage, litres, drapeau "trop proche"), reglages, vacances.
 - `GET /api/waterings` / `GET /api/measurements` : historiques.
-- `PUT /api/settings` : `{ daily_watering_seconds, flow_l_per_min }`.
+- `PUT /api/settings` : `{ daily_watering_seconds, flow_l_per_min,
+  frost_alert_enabled }`.
 - `PUT /api/vacation` : `{ active, days, available_liters, margin_percent }`.
 - `PUT /api/watering-enabled` : `{ enabled: true }`, réactive explicitement
   l'arrosage après un arrêt de sécurité Telegram.
@@ -42,6 +43,24 @@ Chaque bouton contient un identifiant de livraison unique. Une ancienne alerte
 ne peut donc plus modifier l'état après un remplissage ou l'envoi d'une alerte
 plus récente.
 
+## Alertes meteo
+
+Chaque soir a partir de 20 h (heure de Paris), le serveur consulte la prevision
+Open-Meteo pour Saint-Ouen-sur-Seine. Aucun compte ni cle API n'est necessaire.
+
+- **Gel** : une temperature minimale strictement inferieure a **5 °C** dans les
+  7 prochains jours envoie une alerte Telegram. Elle est renvoyee chaque soir
+  tant que le risque persiste. Le bouton **Me le rappeler demain** suspend
+  seulement l'alerte du soir courant ; **Masquer jusqu'au retour au chaud**
+  coupe les alertes jusqu'a ce que l'ensemble de la prevision repasse a 5 °C
+  ou plus. Le bouton correspondant de l'application peut desactiver ou
+  reactiver entierement ces alertes.
+- **Pluie** : a partir de **6 mm** de precipitation prevue/cumulee sur la
+  journee, une alerte demande si l'arrosage automatique du lendemain doit etre
+  maintenu. Sans reponse, il est conserve. Le choix **Non** annule uniquement
+  le cycle automatique de la date suivante, sans modifier les arrosages
+  exceptionnels ni les reglages habituels.
+
 ## Mode vacances
 
 Quantite disponible (moins la marge, 5 % par defaut) repartie equitablement sur
@@ -53,7 +72,7 @@ manuelle dans l'app.
 - **Debit** : duree x debit (reglage `flow_l_per_min`, 1,26 L/min par defaut).
 - **Capteur** : difference de volume (cone tronque de la cuve) entre la mesure
   d'avant-arrosage et celle du lendemain. Non calculee si une des mesures est a
-  moins de 25 cm du capteur (zone non fiable du JSN-SR04T).
+  moins de 20,7 cm du capteur (zone non fiable du JSN-SR04T).
 
 ## Developpement
 

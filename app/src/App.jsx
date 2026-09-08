@@ -208,6 +208,44 @@ function WateringSettings({ settings, onSaved }) {
 	);
 }
 
+function FrostAlertSettings({ settings, onSaved }) {
+	const [enabled, setEnabled] = useState(settings.frost_alert_enabled);
+	const [saving, setSaving] = useState(false);
+
+	useEffect(() => setEnabled(settings.frost_alert_enabled), [settings.frost_alert_enabled]);
+
+	const toggle = async () => {
+		const nextEnabled = !enabled;
+		setSaving(true);
+		try {
+			await updateSettings({ frost_alert_enabled: nextEnabled });
+			setEnabled(nextEnabled);
+			onSaved();
+		} catch (err) {
+			alert(err.message);
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	return (
+		<div className="card">
+			<h2>Alerte gel</h2>
+			<p className="muted">
+				Chaque soir, vérifie les 7 prochains jours à Saint-Ouen-sur-Seine et
+				alerte si une température minimale est inférieure à 5 °C.
+			</p>
+			<button className="secondary" onClick={toggle} disabled={saving}>
+				{saving
+					? "…"
+					: enabled
+						? "Désactiver les alertes gel"
+						: "Activer les alertes gel"}
+			</button>
+		</div>
+	);
+}
+
 function WateringControl({ watering, onSaved }) {
 	const [busy, setBusy] = useState(false);
 	const enabled = watering?.enabled !== false;
@@ -774,6 +812,7 @@ export default function App() {
 						onSaved={refresh}
 					/>
 					<WateringSettings settings={status.settings} onSaved={refresh} />
+					<FrostAlertSettings settings={status.settings} onSaved={refresh} />
 					<VacationCard
 						vacation={status.vacation ?? { active: false }}
 						flow={status.settings.flow_l_per_min}

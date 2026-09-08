@@ -129,7 +129,9 @@ async function migrate() {
 				('daily_watering_seconds', '500'),
 				('flow_l_per_min', '1.26'),
 				('watering_enabled', 'true'),
-				('low_tank_alert_state', 'armed')
+				('low_tank_alert_state', 'armed'),
+				('frost_alert_enabled', 'true'),
+				('frost_alert_state', 'armed')
 			ON CONFLICT (key) DO NOTHING;
 
 		INSERT INTO vacation (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
@@ -163,6 +165,7 @@ async function getSettings() {
 	return {
 		daily_watering_seconds: Number(map.daily_watering_seconds ?? 500),
 		flow_l_per_min: Number(map.flow_l_per_min ?? 1.26),
+		frost_alert_enabled: map.frost_alert_enabled !== "false",
 	};
 }
 
@@ -188,6 +191,109 @@ async function getWateringStatus() {
 	return {
 		enabled: (await getRawSetting("watering_enabled")) !== "false",
 	};
+}
+
+function nextLocalDate() {
+	const date = new Date(`${localDate()}T12:00:00`);
+	date.setDate(date.getDate() + 1);
+	return localDate(date);
+}
+
+async function skipNextAutomaticWatering() {
+	const date = nextLocalDate();
+	await setSetting("skip_automatic_watering_date", date);
+	return date;
+}
+
+async function respondToRainAlert(deliveryId, action) {
+	if (!["keep", "skip"].includes(action)) {
+		throw new Error("action alerte pluie invalide");
+	}
+
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		const { rows } = await client.query(
+			`SELECT key, value FROM settings
+			 WHERE key IN ('rain_alert_delivery_id', 'rain_alert_date')
+			 FOR UPDATE`,
+		);
+		const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+		if (
+			values.rain_alert_delivery_id !== deliveryId ||
+			values.rain_alert_date !== localDate()
+		) {
+			await client.query("COMMIT");
+			return { accepted: false };
+		}
+
+		let skippedDate = null;
+		if (action === "skip") {
+			skippedDate = nextLocalDate();
+			await client.query(
+				`INSERT INTO settings (key, value) VALUES
+				 ('skip_automatic_watering_date', $1)
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+				[skippedDate],
+			);
+		}
+		await client.query(
+			`INSERT INTO settings (key, value) VALUES ('rain_alert_delivery_id', '')
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		);
+		await client.query("COMMIT");
+		return { accepted: true, skippedDate };
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
+async function evaluateFrostAlert(forecastDays) {
+	const settings = await getSettings();
+	const hasFrostRisk = forecastDays.some((day) => day.temperatureMin < 5);
+	const state = (await getRawSetting("frost_alert_state")) ?? "armed";
+
+	if (!hasFrostRisk) {
+		if (state !== "armed") await setSetting("frost_alert_state", "armed");
+		return { shouldAlert: false, rearmed: state !== "armed" };
+	}
+	if (!settings.frost_alert_enabled || state === "muted_until_safe") {
+		return { shouldAlert: false, rearmed: false };
+	}
+	if ((await getRawSetting("last_frost_alert_date")) === localDate()) {
+		return { shouldAlert: false, rearmed: false };
+	}
+
+	const deliveryId = randomUUID();
+	await setSetting("frost_alert_delivery_id", deliveryId);
+	return { shouldAlert: true, deliveryId, rearmed: false };
+}
+
+async function completeFrostAlertDelivery(deliveryId, sent) {
+	if ((await getRawSetting("frost_alert_delivery_id")) !== deliveryId) return;
+	if (sent) {
+		await setSetting("last_frost_alert_date", localDate());
+	} else {
+		await setSetting("frost_alert_delivery_id", "");
+	}
+}
+
+async function respondToFrostAlert(deliveryId, action) {
+	if (!["tomorrow", "until_safe"].includes(action)) {
+		throw new Error("action alerte gel invalide");
+	}
+	if ((await getRawSetting("frost_alert_delivery_id")) !== deliveryId) {
+		return { accepted: false };
+	}
+
+	await setSetting("frost_alert_delivery_id", "");
+	if (action === "until_safe") {
+		await setSetting("frost_alert_state", "muted_until_safe");
+	}
+	return { accepted: true };
 }
 
 // Disabling watering is transactional with cancelling the pending command.
@@ -447,6 +553,10 @@ async function computeWateringSeconds() {
 
 	if (!watering.enabled) {
 		return { seconds: 0, source: "disabled" };
+	}
+
+	if ((await getRawSetting("skip_automatic_watering_date")) === localDate()) {
+		return { seconds: 0, source: "rain_skip" };
 	}
 
 	if (vacation.active && vacation.start_date && vacation.days > 0) {
@@ -809,6 +919,11 @@ module.exports = {
 	evaluateLowTankLevel,
 	completeLowTankAlertDelivery,
 	respondToLowTankAlert,
+	evaluateFrostAlert,
+	completeFrostAlertDelivery,
+	respondToFrostAlert,
+	respondToRainAlert,
+	skipNextAutomaticWatering,
 	setNextWake,
 	getNextWake,
 	getVacation,
