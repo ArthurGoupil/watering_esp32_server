@@ -838,12 +838,12 @@ export default function App() {
 					<NextWakeInfo nextWake={status.next_wake} />
 					<TankGauge tank={status.tank} />
 					<WateringControl watering={status.watering} onSaved={refresh} />
+					<WateringSettings settings={status.settings} onSaved={refresh} />
 					<ManualWateringCard
 						manualWatering={manualWatering}
 						wateringEnabled={status.watering?.enabled !== false}
 						onSaved={refresh}
 					/>
-					<WateringSettings settings={status.settings} onSaved={refresh} />
 					<FrostAlertSettings
 						settings={status.settings}
 						weather={status.weather}
