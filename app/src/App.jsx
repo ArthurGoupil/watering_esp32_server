@@ -235,7 +235,11 @@ function FrostAlertSettings({ settings, onSaved }) {
 				Chaque soir, vérifie les 7 prochains jours à Saint-Ouen-sur-Seine et
 				alerte si une température minimale est inférieure à 5 °C.
 			</p>
-			<button className="secondary" onClick={toggle} disabled={saving}>
+			<button
+				className={enabled ? "danger" : "success"}
+				onClick={toggle}
+				disabled={saving}
+			>
 				{saving
 					? "…"
 					: enabled

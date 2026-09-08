@@ -261,6 +261,12 @@ button.danger {
 	margin-top: 8px;
 }
 
+button.success {
+	background: rgba(74, 222, 128, 0.15);
+	color: var(--green);
+	border: 1px solid rgba(74, 222, 128, 0.4);
+}
+
 label {
 	display: block;
 	font-size: 0.9rem;
