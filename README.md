@@ -45,8 +45,11 @@ plus récente.
 
 ## Alertes meteo
 
-Chaque soir a partir de 20 h (heure de Paris), le serveur consulte la prevision
-Open-Meteo pour Saint-Ouen-sur-Seine. Aucun compte ni cle API n'est necessaire.
+Cloud Scheduler appelle le serveur chaque soir a **20 h** (heure de Paris), qui
+consulte alors une seule fois la prevision Open-Meteo pour Saint-Ouen-sur-Seine.
+En cas d'echec Open-Meteo, de la base ou de Telegram, le serveur effectue au
+maximum trois tentatives espacees de cinq minutes. Aucun compte ni cle API
+n'est necessaire pour Open-Meteo.
 
 - **Gel** : une temperature minimale strictement inferieure a **5 °C** dans les
   7 prochains jours envoie une alerte Telegram. Elle est renvoyee chaque soir
@@ -105,6 +108,14 @@ Après avoir défini ou modifié ces variables, déployer une nouvelle révision
 Cloud Run. Si l'une des deux est absente, le serveur le signale explicitement
 dans ses logs : les messages Telegram existants continuent de fonctionner,
 mais l'alerte de cuve basse est envoyée sans boutons d'action.
+
+Les alertes meteo necessitent aussi `WEATHER_SCHEDULER_SECRET`, une valeur
+aleatoire longue partagee uniquement avec la tache Cloud Scheduler. La tache
+doit envoyer une requete `POST` quotidienne a
+`/internal/weather-check`, avec cet en-tete :
+`X-Weather-Scheduler-Secret: <valeur du secret>`. Elle doit etre planifiee avec
+`0 20 * * *`, le fuseau `Europe/Paris`, et une echeance d'au moins 15 minutes
+pour laisser les tentatives se terminer.
 
 ## Installation sur Android (PWA)
 
