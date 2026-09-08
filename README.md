@@ -17,7 +17,7 @@ Serveur Node/Express du systeme d'arrosage ESP32 :
 
 ## API de l'application
 
-- `GET /api/status` : derniere mesure (pourcentage, litres, drapeau "trop proche"), reglages, vacances.
+- `GET /api/status` : derniere mesure (pourcentage, litres, drapeau "trop proche"), reglages, vacances et dernier releve meteo.
 - `GET /api/waterings` / `GET /api/measurements` : historiques.
 - `PUT /api/settings` : `{ daily_watering_seconds, flow_l_per_min,
   frost_alert_enabled }`.
@@ -50,6 +50,10 @@ consulte alors une seule fois la prevision Open-Meteo pour Saint-Ouen-sur-Seine.
 En cas d'echec Open-Meteo, de la base ou de Telegram, le serveur effectue au
 maximum trois tentatives espacees de cinq minutes. Aucun compte ni cle API
 n'est necessaire pour Open-Meteo.
+
+Le dernier releve reussi est conserve et affiche dans l'application : cumul de
+precipitations de la journee et temperature minimale la plus basse sur les
+sept jours de prevision.
 
 - **Gel** : une temperature minimale strictement inferieure a **5 °C** dans les
   7 prochains jours envoie une alerte Telegram. Elle est renvoyee chaque soir

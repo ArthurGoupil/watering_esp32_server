@@ -193,6 +193,65 @@ async function getWateringStatus() {
 	};
 }
 
+async function recordWeatherSnapshot(forecastDays) {
+	const today = forecastDays.find((day) => day.date === localDate());
+	if (!today) throw new Error("prevision meteo du jour absente");
+	const coldestDay = forecastDays.reduce((coldest, day) =>
+		day.temperatureMin < coldest.temperatureMin ? day : coldest,
+	);
+
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		for (const [key, value] of [
+			["weather_checked_at", new Date().toISOString()],
+			["weather_today_precipitation_mm", today.precipitationMm],
+			["weather_min_temperature_7_days_c", coldestDay.temperatureMin],
+			["weather_min_temperature_7_days_date", coldestDay.date],
+		]) {
+			await client.query(
+				`INSERT INTO settings (key, value) VALUES ($1, $2)
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+				[key, String(value)],
+			);
+		}
+		await client.query("COMMIT");
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
+async function getWeatherStatus() {
+	const [
+		checkedAt,
+		precipitationMm,
+		minimumTemperature,
+		minimumTemperatureDate,
+	] = await Promise.all([
+		getRawSetting("weather_checked_at"),
+		getRawSetting("weather_today_precipitation_mm"),
+		getRawSetting("weather_min_temperature_7_days_c"),
+		getRawSetting("weather_min_temperature_7_days_date"),
+	]);
+	if (
+		!checkedAt ||
+		precipitationMm === null ||
+		minimumTemperature === null ||
+		!minimumTemperatureDate
+	) {
+		return null;
+	}
+	return {
+		checked_at: checkedAt,
+		precipitation_mm: Number(precipitationMm),
+		min_temperature_7_days_c: Number(minimumTemperature),
+		min_temperature_7_days_date: minimumTemperatureDate,
+	};
+}
+
 function nextLocalDate() {
 	const date = new Date(`${localDate()}T12:00:00`);
 	date.setDate(date.getDate() + 1);
@@ -914,6 +973,8 @@ module.exports = {
 	setSetting,
 	getRawSetting,
 	getWateringStatus,
+	recordWeatherSnapshot,
+	getWeatherStatus,
 	disableWatering,
 	enableWatering,
 	evaluateLowTankLevel,

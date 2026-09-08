@@ -140,6 +140,7 @@ async function checkWeatherAlerts() {
 	}
 
 	const forecast = await getWeatherForecast();
+	await db.recordWeatherSnapshot(forecast);
 	const frostDecision = await db.evaluateFrostAlert(forecast);
 	if (frostDecision.rearmed) {
 		log("checkWeatherAlerts -> alertes gel rearmees : previsions toutes >= 5 C.");
@@ -753,12 +754,13 @@ app.post("/internal/weather-check", async (req, res) => {
 // --- API de l'application ---
 app.get("/api/status", async (req, res) => {
 	try {
-		const [measurement, settings, vacation, nextWake, watering] = await Promise.all([
+		const [measurement, settings, vacation, nextWake, watering, weather] = await Promise.all([
 			db.latestMeasurement(),
 			db.getSettings(),
 			db.getVacation(),
 			db.getNextWake(),
 			db.getWateringStatus(),
+			db.getWeatherStatus(),
 		]);
 
 		let tank = null;
@@ -800,6 +802,7 @@ app.get("/api/status", async (req, res) => {
 			vacation: vacationStatus,
 			next_wake: nextWake,
 			watering,
+			weather,
 		});
 	} catch (err) {
 		res.status(500).json({ error: err.message });

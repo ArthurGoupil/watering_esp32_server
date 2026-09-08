@@ -208,7 +208,7 @@ function WateringSettings({ settings, onSaved }) {
 	);
 }
 
-function FrostAlertSettings({ settings, onSaved }) {
+function FrostAlertSettings({ settings, weather, onSaved }) {
 	const [enabled, setEnabled] = useState(settings.frost_alert_enabled);
 	const [saving, setSaving] = useState(false);
 
@@ -231,6 +231,27 @@ function FrostAlertSettings({ settings, onSaved }) {
 	return (
 		<div className="card">
 			<h2>Alerte gel</h2>
+			{weather ? (
+				<div className="weather-summary">
+					<p>
+						Pluviométrie du jour : <strong>{weather.precipitation_mm} mm</strong>
+					</p>
+					<p>
+						Minimum sur 7 jours :{" "}
+						<strong>{weather.min_temperature_7_days_c} °C</strong> (
+						{weather.min_temperature_7_days_date})
+					</p>
+					<p className="muted small">
+						Mise à jour : {formatDate(weather.checked_at)} à{" "}
+						{formatTime(weather.checked_at)}
+					</p>
+				</div>
+			) : (
+				<p className="muted">
+					Aucune donnée météo reçue pour l’instant. Elle apparaîtra après le
+					premier contrôle planifié.
+				</p>
+			)}
 			<p className="muted">
 				Chaque soir, vérifie les 7 prochains jours à Saint-Ouen-sur-Seine et
 				alerte si une température minimale est inférieure à 5 °C.
@@ -816,7 +837,11 @@ export default function App() {
 						onSaved={refresh}
 					/>
 					<WateringSettings settings={status.settings} onSaved={refresh} />
-					<FrostAlertSettings settings={status.settings} onSaved={refresh} />
+					<FrostAlertSettings
+						settings={status.settings}
+						weather={status.weather}
+						onSaved={refresh}
+					/>
 					<VacationCard
 						vacation={status.vacation ?? { active: false }}
 						flow={status.settings.flow_l_per_min}
