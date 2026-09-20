@@ -801,15 +801,12 @@ async function insertMeasurement(endpoint, m) {
 	return rows[0].id;
 }
 
-// Derniere mesure prise en compte par l'app : la plus recente encore liee a
-// une entree d'historique d'arrosage. La jauge est ainsi toujours coherente
-// avec l'historique (suppression comprise), et les mesures /init ou
-// orphelines sont ignorees.
+// Derniere mesure recue de l'ESP32, y compris apres un demarrage /init. La
+// jauge doit montrer le niveau le plus recent, independamment du fait qu'un
+// arrosage ait eu lieu pendant ce reveil.
 async function latestMeasurement() {
 	const { rows } = await pool.query(
-		`SELECT m.* FROM measurements m
-		 JOIN waterings w ON w.measurement_id = m.id
-		 ORDER BY m.created_at DESC LIMIT 1`,
+		"SELECT * FROM measurements ORDER BY created_at DESC LIMIT 1",
 	);
 	return rows[0] ?? null;
 }
