@@ -25,9 +25,9 @@ const TANK_HEIGHT_CM = 78;
 const TANK_RADIUS_BOTTOM_CM = 20.5;
 const TANK_RADIUS_TOP_CM = 27;
 // Calibrated sensor-to-water distances. The sensor cannot reliably measure
-// the actual 10 cm full distance, so readings below TOO_CLOSE_CM are shown as
+// the actual 5 cm full distance, so readings below TOO_CLOSE_CM are shown as
 // a minimum guaranteed level rather than as an exact value.
-const FULL_DISTANCE_CM = 10;
+const FULL_DISTANCE_CM = 5;
 const EMPTY_DISTANCE_CM = 69.1;
 // Below this distance, the sensor is too close to the water for a precise
 // reading. Display a guaranteed minimum rather than a falsely exact value.

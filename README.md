@@ -80,7 +80,7 @@ manuelle dans l'app.
 - **Capteur** : difference de volume (cone tronque de la cuve) entre la mesure
   d'avant-arrosage et celle du lendemain. Non calculee si une des mesures est a
   moins de 22 cm du capteur (zone non fiable du JSN-SR04T). La calibration
-  actuelle considere 0 % a 69,1 cm et 100 % a 10 cm, pour une capacite
+  actuelle considere 0 % a 69,1 cm et 100 % a 5 cm, pour une capacite
   confirmee de 120 L. Une lecture inferieure a 22 cm est affichee comme un
   minimum garanti, car le capteur ne mesure pas correctement la zone tres
   proche de l'eau.
