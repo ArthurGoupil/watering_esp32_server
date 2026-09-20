@@ -79,7 +79,8 @@ manuelle dans l'app.
 - **Debit** : duree x debit (reglage `flow_l_per_min`, 1,26 L/min par defaut).
 - **Capteur** : difference de volume (cone tronque de la cuve) entre la mesure
   d'avant-arrosage et celle du lendemain. Non calculee si une des mesures est a
-  moins de 20,7 cm du capteur (zone non fiable du JSN-SR04T).
+  moins de 22 cm du capteur (zone non fiable du JSN-SR04T). La calibration
+  actuelle considere 0 % a 69,1 cm et 100 % a 21,2 cm.
 
 ## Developpement
 

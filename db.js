@@ -24,12 +24,12 @@ const pool = new Pool({
 const TANK_HEIGHT_CM = 78;
 const TANK_RADIUS_BOTTOM_CM = 20.5;
 const TANK_RADIUS_TOP_CM = 27;
-// Distance capteur -> eau consideree comme "cuve pleine" (100 %).
-const FULL_DISTANCE_CM = 10;
-// The installed sensor has provided stable readings from 20 cm onward. Below
-// that distance, keep showing a minimum guaranteed tank level instead of a
-// falsely precise value.
-const TOO_CLOSE_CM = 20.7;
+// Calibrated sensor-to-water distances, measured with this installation.
+const FULL_DISTANCE_CM = 21.2;
+const EMPTY_DISTANCE_CM = 69.1;
+// Below this distance, the sensor is too close to the water for a precise
+// reading. Display a guaranteed minimum rather than a falsely exact value.
+const TOO_CLOSE_CM = 22;
 
 // Volume d'eau (litres) pour une hauteur d'eau donnee (cm) dans le cone tronque.
 function volumeLitersForWaterHeight(waterHeightCm) {
@@ -42,9 +42,25 @@ function volumeLitersForWaterHeight(waterHeightCm) {
 	return volumeCm3 / 1000;
 }
 
-// Volume (litres) a partir de la distance capteur -> eau (cm).
-function volumeLitersForDistance(distanceCm) {
+// Physical volume (litres) from the bottom to the sensor's detected surface.
+function physicalVolumeLitersForDistance(distanceCm) {
 	return volumeLitersForWaterHeight(TANK_HEIGHT_CM - distanceCm);
+}
+
+const EMPTY_VOLUME_LITERS = physicalVolumeLitersForDistance(EMPTY_DISTANCE_CM);
+
+// Usable volume (litres) based on the measured empty/full calibration. Clamp
+// outside that range so the app remains between 0 L and the calibrated full
+// capacity even if a raw measurement slightly overshoots either endpoint.
+function volumeLitersForDistance(distanceCm) {
+	const calibratedDistance = Math.max(
+		FULL_DISTANCE_CM,
+		Math.min(EMPTY_DISTANCE_CM, distanceCm),
+	);
+	return Math.max(
+		0,
+		physicalVolumeLitersForDistance(calibratedDistance) - EMPTY_VOLUME_LITERS,
+	);
 }
 
 const FULL_VOLUME_LITERS = volumeLitersForDistance(FULL_DISTANCE_CM);
