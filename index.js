@@ -57,6 +57,7 @@ const app = express();
 app.use(express.json());
 let telegramActionButtonsEnabled = false;
 let wateringDisabledInMemory = false;
+let systemPausedInMemory = false;
 
 function log(...args) {
 	console.log(`[${new Date().toISOString()}]`, ...args);
@@ -135,6 +136,10 @@ async function getWeatherForecast() {
 }
 
 async function checkWeatherAlerts() {
+	if ((await db.getSystemStatus()).paused) {
+		log("checkWeatherAlerts -> ignore : systeme en pause.");
+		return;
+	}
 	if (!telegramEnabled) {
 		throw new Error("notifications Telegram indisponibles");
 	}
@@ -232,6 +237,9 @@ async function checkWeatherAlertsWithRetries() {
 
 async function handleTankMeasurement(m, endpoint) {
 	try {
+		if ((await db.getSystemStatus()).paused) {
+			return;
+		}
 		const decision = await db.evaluateLowTankLevel(m.tankLevel);
 		if (decision.rearmed) {
 			log(
@@ -335,6 +343,26 @@ app.get(["/init", "/water"], async (req, res) => {
 		return res.status(400).json({ error: "tank_level manquant ou invalide" });
 	}
 
+	try {
+		if ((await db.getSystemStatus()).paused) {
+			log(`${endpoint} -> ignore : systeme en pause.`);
+			return endpoint === "/init"
+				? res.status(204).end()
+				: res.json({
+						ok: true,
+						system_paused: true,
+						watering_seconds: 0,
+					});
+		}
+	} catch (err) {
+		log(`${endpoint} -> ERREUR verification pause : ${err.message}`);
+		return res.status(503).json({
+			ok: false,
+			error: "impossible de verifier l'etat du systeme",
+			watering_seconds: 0,
+		});
+	}
+
 	logMeasurement(endpoint, m);
 	await handleTankMeasurement(m, endpoint);
 
@@ -350,8 +378,15 @@ app.get(["/init", "/water"], async (req, res) => {
 	}
 
 	// Duree d'arrosage du jour : reglages ou mode vacances.
-	let seconds = wateringDisabledInMemory ? 0 : FALLBACK_WATERING_SECONDS;
-	let source = wateringDisabledInMemory ? "disabled" : "fallback";
+	let seconds =
+		wateringDisabledInMemory || systemPausedInMemory
+			? 0
+			: FALLBACK_WATERING_SECONDS;
+	let source = systemPausedInMemory
+		? "system_paused"
+		: wateringDisabledInMemory
+			? "disabled"
+			: "fallback";
 	try {
 		const decision = await db.computeWateringSeconds();
 		seconds = decision.seconds;
@@ -388,12 +423,18 @@ app.get(["/init", "/water"], async (req, res) => {
 			});
 			if (!result.created) {
 				log(
-					result.disabled
-						? "/water  -> arrosage automatique bloque : arrosage desactive"
-						: `/water  -> arrosage automatique deja enregistre aujourd'hui (id=${result.id}) : 0s renvoye`,
+					result.paused
+						? "/water  -> arrosage automatique bloque : systeme en pause"
+						: result.disabled
+							? "/water  -> arrosage automatique bloque : arrosage desactive"
+							: `/water  -> arrosage automatique deja enregistre aujourd'hui (id=${result.id}) : 0s renvoye`,
 				);
 				seconds = 0;
-				source = result.disabled ? "disabled" : "duplicate";
+				source = result.paused
+					? "system_paused"
+					: result.disabled
+						? "disabled"
+						: "duplicate";
 			}
 		}
 		if (
@@ -425,16 +466,21 @@ app.get(["/init", "/water"], async (req, res) => {
 // demande depuis l'app. ---
 app.get("/command", async (req, res) => {
 	try {
-		const [command, watering] = await Promise.all([
+		const [command, watering, system] = await Promise.all([
 			db.getCommand(),
 			db.getWateringStatus(),
+			db.getSystemStatus(),
 		]);
 		res.json({
 			watering_requested:
-				watering.enabled && Boolean(command.manual_watering_requested),
-			requested_seconds: watering.enabled ? command.requested_seconds : null,
+				watering.enabled &&
+				!system.paused &&
+				Boolean(command.manual_watering_requested),
+			requested_seconds:
+				watering.enabled && !system.paused ? command.requested_seconds : null,
 			request_id: command.request_id,
 			watering_enabled: watering.enabled,
+			system_paused: system.paused,
 		});
 	} catch (err) {
 		res.status(500).json({ error: err.message });
@@ -462,6 +508,25 @@ app.get("/manual-water", async (req, res) => {
 		return res.status(400).json({ error: "parametres manquants ou invalides" });
 	}
 
+	try {
+		if ((await db.getSystemStatus()).paused) {
+			log(`/manual-water -> ignore : systeme en pause (request_id=${requestId}).`);
+			return res.json({
+				ok: false,
+				cancelled: true,
+				system_paused: true,
+				watering_seconds: 0,
+			});
+		}
+	} catch (err) {
+		log(`/manual-water -> ERREUR verification pause : ${err.message}`);
+		return res.status(503).json({
+			ok: false,
+			error: "impossible de verifier l'etat du systeme",
+			watering_seconds: 0,
+		});
+	}
+
 	logMeasurement("/manual-water", m);
 	await handleTankMeasurement(m, "/manual-water");
 
@@ -478,13 +543,18 @@ app.get("/manual-water", async (req, res) => {
 		if (result.cancelled) {
 			log(
 				`/manual-water  -> commande ${
-					result.disabled ? "bloquee (arrosage desactive)" : "annulee/remplacee"
+					result.paused
+						? "bloquee (systeme en pause)"
+						: result.disabled
+							? "bloquee (arrosage desactive)"
+							: "annulee/remplacee"
 				} (request_id=${requestId}) : pompe non activee`,
 			);
 			return res.json({
 				ok: false,
 				cancelled: true,
 				disabled: Boolean(result.disabled),
+				system_paused: Boolean(result.paused),
 				watering_seconds: 0,
 			});
 		}
@@ -517,6 +587,9 @@ app.get("/manual-water/done", async (req, res) => {
 	}
 
 	try {
+		if ((await db.getSystemStatus()).paused) {
+			return res.status(204).end();
+		}
 		const settingKey = "last_manual_watering_done_request_id";
 		const lastCompletedRequestId = await db.getRawSetting(settingKey);
 		if (lastCompletedRequestId === String(requestId)) {
@@ -561,6 +634,15 @@ app.post("/telegram/webhook", async (req, res) => {
 	}
 
 	try {
+		if ((await db.getSystemStatus()).paused) {
+			const answered = await answerCallbackQuery(
+				callback.id,
+				"Système en pause : action ignorée.",
+			);
+			return answered
+				? res.status(200).json({ ok: true, paused: true })
+				: res.status(502).json({ error: "reponse Telegram non envoyee" });
+		}
 		const actionMatch = /^low_tank:(disable|keep|mute):([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(
 			String(callback.data),
 		);
@@ -688,6 +770,9 @@ app.get("/next-wake", async (req, res) => {
 		if (Number.isNaN(seconds) || seconds <= 0) {
 			return res.status(400).json({ error: "seconds manquant ou invalide" });
 		}
+		if ((await db.getSystemStatus()).paused) {
+			return res.status(204).end();
+		}
 		await db.setNextWake(seconds, fullCycle);
 		res.status(204).end();
 	} catch (err) {
@@ -714,6 +799,9 @@ app.post("/device-diagnostics", async (req, res) => {
 	}
 
 	try {
+		if ((await db.getSystemStatus()).paused) {
+			return res.status(204).end();
+		}
 		const id = await db.insertDeviceDiagnostics({
 			resetReason,
 			persistentCheckpoint: checkpoint || null,
@@ -754,13 +842,14 @@ app.post("/internal/weather-check", async (req, res) => {
 // --- API de l'application ---
 app.get("/api/status", async (req, res) => {
 	try {
-		const [measurement, settings, vacation, nextWake, watering, weather] = await Promise.all([
+		const [measurement, settings, vacation, nextWake, watering, weather, system] = await Promise.all([
 			db.latestMeasurement(),
 			db.getSettings(),
 			db.getVacation(),
 			db.getNextWake(),
 			db.getWateringStatus(),
 			db.getWeatherStatus(),
+			db.getSystemStatus(),
 		]);
 
 		let tank = null;
@@ -802,6 +891,7 @@ app.get("/api/status", async (req, res) => {
 			vacation: vacationStatus,
 			next_wake: nextWake,
 			watering,
+			system,
 			weather,
 		});
 	} catch (err) {
@@ -962,17 +1052,50 @@ app.put("/api/watering-enabled", async (req, res) => {
 	}
 });
 
+app.get("/api/alerts", async (req, res) => {
+	try {
+		res.json(await db.getAlertStatuses());
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
+app.put("/api/system-paused", async (req, res) => {
+	if (typeof req.body?.paused !== "boolean") {
+		return res.status(400).json({ error: "paused doit etre un booleen" });
+	}
+	try {
+		const system = await db.setSystemPaused(req.body.paused);
+		systemPausedInMemory = system.paused;
+		log(
+			system.paused
+				? "/api/system-paused -> systeme mis en pause."
+				: "/api/system-paused -> systeme repris.",
+		);
+		res.json(system);
+	} catch (err) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
 app.get("/api/manual-watering", async (req, res) => {
 	try {
-		const [command, watering] = await Promise.all([
+		const [command, watering, system] = await Promise.all([
 			db.getCommand(),
 			db.getWateringStatus(),
+			db.getSystemStatus(),
 		]);
 		res.json({
-			requested: watering.enabled && Boolean(command.manual_watering_requested),
-			requested_seconds: watering.enabled ? command.requested_seconds : null,
-			requested_at: watering.enabled ? command.requested_at : null,
+			requested:
+				watering.enabled &&
+				!system.paused &&
+				Boolean(command.manual_watering_requested),
+			requested_seconds:
+				watering.enabled && !system.paused ? command.requested_seconds : null,
+			requested_at:
+				watering.enabled && !system.paused ? command.requested_at : null,
 			watering_enabled: watering.enabled,
+			system_paused: system.paused,
 		});
 	} catch (err) {
 		res.status(500).json({ error: err.message });
@@ -995,6 +1118,11 @@ app.put("/api/manual-watering", async (req, res) => {
 			requested_at: command.requested_at,
 		});
 	} catch (err) {
+		if (err.code === "SYSTEM_PAUSED") {
+			return res.status(409).json({
+				error: "Le système est en pause. Reprenez-le avant de demander un arrosage.",
+			});
+		}
 		if (err.code === "WATERING_DISABLED") {
 			return res.status(409).json({
 				error: "L'arrosage est désactivé. Réactivez-le d'abord dans l'application.",
@@ -1038,6 +1166,7 @@ app.get(
 async function checkMissedWatering() {
 	if (!telegramEnabled) return;
 	try {
+		if ((await db.getSystemStatus()).paused) return;
 		const now = new Date();
 		const parisTime = new Date(
 			now.toLocaleString("en-US", { timeZone: "Europe/Paris" }),
@@ -1080,6 +1209,7 @@ async function start() {
 		try {
 			await db.migrate();
 			wateringDisabledInMemory = !(await db.getWateringStatus()).enabled;
+			systemPausedInMemory = (await db.getSystemStatus()).paused;
 			log("Base de donnees prete (migration OK).");
 		} catch (err) {
 			log(`ERREUR migration DB : ${err.message}`);

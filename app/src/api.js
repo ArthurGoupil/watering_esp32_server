@@ -10,6 +10,7 @@ async function request(url, options) {
 }
 
 export const getStatus = () => request("/api/status");
+export const getAlerts = () => request("/api/alerts");
 export const getWaterings = (limit = 30) =>
 	request(`/api/waterings?limit=${limit}`);
 export const getDeviceDiagnostics = (limit = 20) =>
@@ -42,4 +43,10 @@ export const enableWatering = () =>
 		method: "PUT",
 		headers: jsonHeaders,
 		body: JSON.stringify({ enabled: true }),
+	});
+export const updateSystemPaused = (paused) =>
+	request("/api/system-paused", {
+		method: "PUT",
+		headers: jsonHeaders,
+		body: JSON.stringify({ paused }),
 	});

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
 	getStatus,
+	getAlerts,
 	getWaterings,
 	getDeviceDiagnostics,
 	deleteWatering,
@@ -10,6 +11,7 @@ import {
 	requestManualWatering,
 	cancelManualWatering,
 	enableWatering,
+	updateSystemPaused,
 } from "./api.js";
 
 const formatDate = (iso) =>
@@ -716,6 +718,7 @@ function Navigation({ activeView, isOpen, onNavigate, onClose }) {
 	const entries = [
 		["home", "Accueil"],
 		["history", "Historique"],
+		["alerts", "Alertes"],
 		["diagnostics", "Diagnostic ESP32"],
 	];
 
@@ -750,28 +753,103 @@ function Navigation({ activeView, isOpen, onNavigate, onClose }) {
 	);
 }
 
+const alertStatusLabels = {
+	active: ["Active", "status-active"],
+	alert_sent: ["Alerte envoyée", "status-warning"],
+	muted: ["Alerte désactivée jusqu’au remplissage", "status-muted"],
+	muted_until_safe: ["Alerte masquée jusqu’au retour au chaud", "status-muted"],
+	disabled: ["Alerte désactivée", "status-muted"],
+	watering_disabled: ["Arrosage désactivé", "status-warning"],
+	paused: ["Système en pause", "status-paused"],
+};
+
+function AlertStatus({ status }) {
+	const [label, className] = alertStatusLabels[status] ?? ["Inconnu", "status-muted"];
+	return <span className={`alert-status ${className}`}>{label}</span>;
+}
+
+function AlertsPage({ alerts, onSaved }) {
+	const [saving, setSaving] = useState(false);
+	const paused = alerts.system.paused;
+	const rows = [
+		["Cuve basse", alerts.low_tank.status],
+		["Gel", alerts.frost.status],
+		["Pluie", alerts.rain.status],
+		["Arrosage manqué", alerts.missed_watering.status],
+	];
+
+	const togglePause = async () => {
+		setSaving(true);
+		try {
+			await updateSystemPaused(!paused);
+			onSaved();
+		} catch (err) {
+			alert(err.message);
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	return (
+		<>
+			<div className={`card system-pause-card ${paused ? "is-paused" : ""}`}>
+				<h2>Système</h2>
+				<p>
+					État : <AlertStatus status={paused ? "paused" : "active"} />
+				</p>
+				<p className="muted">
+					{paused
+						? "Arrosage, commandes ESP32 et alertes automatiques suspendus."
+						: "Arrosage et alertes automatiques actifs."}
+				</p>
+				<button
+					className={paused ? "success" : "danger"}
+					onClick={togglePause}
+					disabled={saving}
+				>
+					{saving ? "…" : paused ? "Reprendre le système" : "Mettre le système en pause"}
+				</button>
+			</div>
+			<div className="card">
+				<h2>Alertes</h2>
+				<ul className="alert-list">
+					{rows.map(([name, status]) => (
+						<li key={name}>
+							<span>{name}</span>
+							<AlertStatus status={status} />
+						</li>
+					))}
+				</ul>
+			</div>
+		</>
+	);
+}
+
 /* --- Application --- */
 export default function App() {
 	const [status, setStatus] = useState(null);
 	const [waterings, setWaterings] = useState([]);
 	const [diagnostics, setDiagnostics] = useState([]);
 	const [manualWatering, setManualWatering] = useState(null);
+	const [alerts, setAlerts] = useState(null);
 	const [error, setError] = useState(null);
 	const [activeView, setActiveView] = useState("home");
 	const [menuOpen, setMenuOpen] = useState(false);
 
 	const refresh = async () => {
 		try {
-			const [s, w, d, m] = await Promise.all([
+			const [s, w, d, m, a] = await Promise.all([
 				getStatus(),
 				getWaterings(200),
 				getDeviceDiagnostics(100),
 				getManualWatering(),
+				getAlerts(),
 			]);
 			setStatus(s);
 			setWaterings(w);
 			setDiagnostics(d);
 			setManualWatering(m);
+			setAlerts(a);
 			setError(null);
 		} catch (err) {
 			setError(err.message);
@@ -857,6 +935,8 @@ export default function App() {
 				</>
 			) : activeView === "history" ? (
 				<History waterings={waterings} onDeleted={refresh} />
+			) : activeView === "alerts" ? (
+				<AlertsPage alerts={alerts} onSaved={refresh} />
 			) : (
 				<DiagnosticsCard diagnostics={diagnostics} />
 			)}

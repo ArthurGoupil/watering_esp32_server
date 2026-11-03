@@ -151,6 +151,7 @@ async function migrate() {
 				('daily_watering_seconds', '500'),
 				('flow_l_per_min', '1.26'),
 				('watering_enabled', 'true'),
+				('system_paused', 'false'),
 				('low_tank_alert_state', 'armed'),
 				('frost_alert_enabled', 'true'),
 				('frost_alert_state', 'armed')
@@ -212,6 +213,82 @@ async function getRawSetting(key) {
 async function getWateringStatus() {
 	return {
 		enabled: (await getRawSetting("watering_enabled")) !== "false",
+	};
+}
+
+async function getSystemStatus() {
+	return {
+		paused: (await getRawSetting("system_paused")) === "true",
+	};
+}
+
+async function setSystemPaused(paused) {
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		await client.query(
+			`INSERT INTO settings (key, value) VALUES ('system_paused', $1)
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			[String(paused)],
+		);
+		if (paused) {
+			await client.query(
+				`UPDATE commands SET manual_watering_requested = false,
+				 requested_seconds = NULL, requested_at = NULL,
+				 request_id = request_id + CASE WHEN manual_watering_requested THEN 1 ELSE 0 END
+				 WHERE id = 1`,
+			);
+		}
+		await client.query("COMMIT");
+		return getSystemStatus();
+	} catch (err) {
+		await client.query("ROLLBACK");
+		throw err;
+	} finally {
+		client.release();
+	}
+}
+
+async function getAlertStatuses() {
+	const keys = [
+		"system_paused",
+		"watering_enabled",
+		"low_tank_alert_state",
+		"frost_alert_enabled",
+		"frost_alert_state",
+		"last_rain_alert_date",
+		"last_missed_alert_date",
+	];
+	const { rows } = await pool.query(
+		"SELECT key, value FROM settings WHERE key = ANY($1)",
+		[keys],
+	);
+	const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+	const paused = values.system_paused === "true";
+	return {
+		system: { paused },
+		low_tank: {
+			status: paused
+				? "paused"
+				: values.watering_enabled === "false"
+					? "watering_disabled"
+					: values.low_tank_alert_state === "muted"
+						? "muted"
+						: values.low_tank_alert_state === "sent"
+							? "alert_sent"
+							: "active",
+		},
+		frost: {
+			status: paused
+				? "paused"
+				: values.frost_alert_enabled === "false"
+					? "disabled"
+					: values.frost_alert_state === "muted_until_safe"
+						? "muted_until_safe"
+						: "active",
+		},
+		rain: { status: paused ? "paused" : "active" },
+		missed_watering: { status: paused ? "paused" : "active" },
 	};
 }
 
@@ -631,11 +708,16 @@ function vacationDaysElapsed(vacation, today = localDate()) {
  * - Sinon : duree quotidienne definie dans les reglages.
  */
 async function computeWateringSeconds() {
-	const [settings, vacation, watering] = await Promise.all([
+	const [settings, vacation, watering, system] = await Promise.all([
 		getSettings(),
 		getVacation(),
 		getWateringStatus(),
+		getSystemStatus(),
 	]);
+
+	if (system.paused) {
+		return { seconds: 0, source: "system_paused" };
+	}
 
 	if (!watering.enabled) {
 		return { seconds: 0, source: "disabled" };
@@ -676,9 +758,16 @@ async function requestManualWatering(seconds) {
 		await client.query("BEGIN");
 		await client.query("SELECT id FROM commands WHERE id = 1 FOR UPDATE");
 		const { rows } = await client.query(
-			"SELECT value FROM settings WHERE key = 'watering_enabled' FOR UPDATE",
+			`SELECT key, value FROM settings
+			 WHERE key IN ('watering_enabled', 'system_paused') FOR UPDATE`,
 		);
-		if (rows[0]?.value === "false") {
+		const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+		if (values.system_paused === "true") {
+			const error = new Error("systeme en pause");
+			error.code = "SYSTEM_PAUSED";
+			throw error;
+		}
+		if (values.watering_enabled === "false") {
 			const error = new Error("arrosage desactive");
 			error.code = "WATERING_DISABLED";
 			throw error;
@@ -740,6 +829,10 @@ async function recordManualWatering(requestId, seconds, measurementId, distanceC
 		const map = Object.fromEntries(
 			settingsResult.rows.map((r) => [r.key, r.value]),
 		);
+		if (map.system_paused === "true") {
+			await client.query("ROLLBACK");
+			return { cancelled: true, paused: true };
+		}
 		if (map.watering_enabled === "false") {
 			await client.query("ROLLBACK");
 			return { cancelled: true, disabled: true };
@@ -842,10 +935,18 @@ async function recordAutomaticWateringOnceToday(w) {
 	try {
 		await client.query("BEGIN");
 		await client.query("SELECT pg_advisory_xact_lock($1)", [5172026]);
-		const { rows: wateringRows } = await client.query(
-			"SELECT value FROM settings WHERE key = 'watering_enabled' FOR UPDATE",
+		const { rows: settingRows } = await client.query(
+			`SELECT key, value FROM settings
+			 WHERE key IN ('watering_enabled', 'system_paused') FOR UPDATE`,
 		);
-		if (wateringRows[0]?.value === "false") {
+		const settings = Object.fromEntries(
+			settingRows.map((row) => [row.key, row.value]),
+		);
+		if (settings.system_paused === "true") {
+			await client.query("COMMIT");
+			return { created: false, paused: true };
+		}
+		if (settings.watering_enabled === "false") {
 			await client.query("COMMIT");
 			return { created: false, disabled: true };
 		}
@@ -997,6 +1098,9 @@ module.exports = {
 	setSetting,
 	getRawSetting,
 	getWateringStatus,
+	getSystemStatus,
+	setSystemPaused,
+	getAlertStatuses,
 	recordWeatherSnapshot,
 	getWeatherStatus,
 	disableWatering,
