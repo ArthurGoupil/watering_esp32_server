@@ -40,7 +40,14 @@ const formatDuration = (seconds) => {
 };
 
 /* --- Bandeau prochain réveil de l'ESP32 --- */
-function NextWakeInfo({ nextWake }) {
+function NextWakeInfo({ nextWake, paused }) {
+	if (paused) {
+		return (
+			<p className="muted small next-wake">
+				⏸ Système en pause : réveils ESP32 désactivés.
+			</p>
+		);
+	}
 	if (!nextWake) return null;
 
 	const at = new Date(nextWake.at);
@@ -57,10 +64,11 @@ function NextWakeInfo({ nextWake }) {
 }
 
 /* --- Jauge de cuve (SVG) --- */
-function TankGauge({ tank }) {
+function TankGauge({ tank, paused }) {
 	if (!tank) {
 		return (
-			<div className="card tank-card">
+			<div className={`card tank-card ${paused ? "section-disabled" : ""}`}>
+				{paused && <DisabledBadge />}
 				<p className="muted">Aucune mesure reçue pour l’instant.</p>
 			</div>
 		);
@@ -75,7 +83,8 @@ function TankGauge({ tank }) {
 	const confirmedWaterTop = 146 - confirmedFillHeight;
 
 	return (
-		<div className="card tank-card">
+		<div className={`card tank-card ${paused ? "section-disabled" : ""}`}>
+			{paused && <DisabledBadge />}
 			<div className="tank-visual">
 				<svg viewBox="0 0 120 160" className="tank-svg">
 					<defs>
@@ -165,7 +174,11 @@ function TankGauge({ tank }) {
 }
 
 /* --- Réglage de la durée quotidienne --- */
-function WateringSettings({ settings, onSaved }) {
+function DisabledBadge() {
+	return <span className="badge disabled-badge">désactivé</span>;
+}
+
+function WateringSettings({ settings, onSaved, disabled }) {
 	const [minutes, setMinutes] = useState(
 		Math.round(settings.daily_watering_seconds / 60),
 	);
@@ -192,8 +205,8 @@ function WateringSettings({ settings, onSaved }) {
 	};
 
 	return (
-		<div className="card">
-			<h2>Arrosage quotidien</h2>
+		<div className={`card ${disabled ? "section-disabled" : ""}`}>
+			<h2>Arrosage quotidien {disabled && <DisabledBadge />}</h2>
 			<div className="slider-row">
 				<input
 					type="range"
@@ -201,6 +214,7 @@ function WateringSettings({ settings, onSaved }) {
 					max="30"
 					value={minutes}
 					onChange={(e) => setMinutes(Number(e.target.value))}
+					disabled={disabled}
 				/>
 				<span className="slider-value">{minutes} min</span>
 			</div>
@@ -208,14 +222,14 @@ function WateringSettings({ settings, onSaved }) {
 				≈ <strong>{liters} L</strong> par jour (débit{" "}
 				{settings.flow_l_per_min} L/min)
 			</p>
-			<button onClick={save} disabled={saving}>
+			<button onClick={save} disabled={saving || disabled}>
 				{saved ? "✓ Enregistré" : saving ? "…" : "Enregistrer"}
 			</button>
 		</div>
 	);
 }
 
-function FrostAlertSettings({ settings, weather, onSaved }) {
+function FrostAlertSettings({ settings, weather, onSaved, disabled }) {
 	const [enabled, setEnabled] = useState(settings.frost_alert_enabled);
 	const [saving, setSaving] = useState(false);
 
@@ -236,8 +250,8 @@ function FrostAlertSettings({ settings, weather, onSaved }) {
 	};
 
 	return (
-		<div className="card">
-			<h2>Météo</h2>
+		<div className={`card ${disabled ? "section-disabled" : ""}`}>
+			<h2>Météo {disabled && <DisabledBadge />}</h2>
 			{weather ? (
 				<div className="weather-summary">
 					<p>
@@ -268,7 +282,7 @@ function FrostAlertSettings({ settings, weather, onSaved }) {
 			<button
 				className={`frost-alert-toggle ${enabled ? "danger" : "success"}`}
 				onClick={toggle}
-				disabled={saving}
+				disabled={saving || disabled}
 			>
 				{saving
 					? "…"
@@ -280,7 +294,7 @@ function FrostAlertSettings({ settings, weather, onSaved }) {
 	);
 }
 
-function WateringControl({ watering, onSaved }) {
+function WateringControl({ watering, onSaved, paused }) {
 	const [busy, setBusy] = useState(false);
 	const enabled = watering?.enabled !== false;
 
@@ -295,6 +309,17 @@ function WateringControl({ watering, onSaved }) {
 			setBusy(false);
 		}
 	};
+
+	if (paused) {
+		return (
+			<div className="card watering-disabled section-disabled">
+				<h2>Arrosage <DisabledBadge /></h2>
+				<p className="muted">
+					Arrosage automatique et exceptionnel suspendus par la pause système.
+				</p>
+			</div>
+		);
+	}
 
 	if (enabled) return null;
 
@@ -318,7 +343,7 @@ function WateringControl({ watering, onSaved }) {
 }
 
 /* --- Mode vacances --- */
-function VacationCard({ vacation, flow, onSaved }) {
+function VacationCard({ vacation, flow, onSaved, disabled }) {
 	const active = vacation?.active;
 	const [days, setDays] = useState(vacation?.days ?? 14);
 	const [liters, setLiters] = useState(vacation?.available_liters ?? 100);
@@ -350,8 +375,15 @@ function VacationCard({ vacation, flow, onSaved }) {
 	};
 
 	return (
-		<div className={`card ${active ? "vacation-active" : ""}`}>
-			<h2>Mode vacances {active && <span className="badge">actif</span>}</h2>
+		<div
+			className={`card ${active ? "vacation-active" : ""} ${
+				disabled ? "section-disabled" : ""
+			}`}
+		>
+			<h2>
+				Mode vacances {active && <span className="badge">actif</span>}{" "}
+				{disabled && <DisabledBadge />}
+			</h2>
 
 			{active ? (
 				<>
@@ -373,7 +405,7 @@ function VacationCard({ vacation, flow, onSaved }) {
 						{vacation.available_liters} L répartis sur {vacation.days} jours
 						(marge {vacation.margin_percent} %)
 					</p>
-					<button onClick={toggle} disabled={busy} className="secondary">
+					<button onClick={toggle} disabled={busy || disabled} className="secondary">
 						Désactiver et revenir au réglage quotidien
 					</button>
 				</>
@@ -388,6 +420,7 @@ function VacationCard({ vacation, flow, onSaved }) {
 								max="60"
 								value={days}
 								onChange={(e) => setDays(Number(e.target.value))}
+								disabled={disabled}
 							/>
 							<span>jours</span>
 						</div>
@@ -401,6 +434,7 @@ function VacationCard({ vacation, flow, onSaved }) {
 								max="120"
 								value={liters}
 								onChange={(e) => setLiters(Number(e.target.value))}
+								disabled={disabled}
 							/>
 							<span>litres</span>
 						</div>
@@ -411,7 +445,7 @@ function VacationCard({ vacation, flow, onSaved }) {
 						<br />À la fin, l’arrosage <strong>s’arrête</strong> jusqu’à
 						désactivation manuelle.
 					</p>
-					<button onClick={toggle} disabled={busy}>
+					<button onClick={toggle} disabled={busy || disabled}>
 						Activer le mode vacances
 					</button>
 				</>
@@ -421,19 +455,27 @@ function VacationCard({ vacation, flow, onSaved }) {
 }
 
 /* --- Arrosage exceptionnel (déclenché à distance) --- */
-function ManualWateringCard({ manualWatering, wateringEnabled, onSaved }) {
+function ManualWateringCard({
+	manualWatering,
+	wateringEnabled,
+	onSaved,
+	disabled,
+}) {
 	const [seconds, setSeconds] = useState(120);
 	const [busy, setBusy] = useState(false);
 
 	const pending = manualWatering?.requested;
 
-	if (!wateringEnabled) {
+	if (!wateringEnabled || disabled) {
 		return (
 			<div className="card manual-watering-blocked">
-				<h2>Arrosage exceptionnel</h2>
+				<h2>
+					Arrosage exceptionnel {disabled && <DisabledBadge />}
+				</h2>
 				<p className="muted">
-					Indisponible tant que l’arrosage est désactivé. Réactivez-le
-					d’abord avec le contrôle ci-dessus.
+					{disabled
+						? "Indisponible tant que le système est en pause."
+						: "Indisponible tant que l’arrosage est désactivé. Réactivez-le d’abord avec le contrôle ci-dessus."}
 				</p>
 			</div>
 		);
@@ -913,24 +955,38 @@ export default function App() {
 			/>
 			{activeView === "home" ? (
 				<>
-					<NextWakeInfo nextWake={status.next_wake} />
-					<TankGauge tank={status.tank} />
-					<WateringControl watering={status.watering} onSaved={refresh} />
-					<WateringSettings settings={status.settings} onSaved={refresh} />
+					<NextWakeInfo
+						nextWake={status.next_wake}
+						paused={status.system?.paused}
+					/>
+					<TankGauge tank={status.tank} paused={status.system?.paused} />
+					<WateringControl
+						watering={status.watering}
+						onSaved={refresh}
+						paused={status.system?.paused}
+					/>
+					<WateringSettings
+						settings={status.settings}
+						onSaved={refresh}
+						disabled={status.system?.paused}
+					/>
 					<ManualWateringCard
 						manualWatering={manualWatering}
 						wateringEnabled={status.watering?.enabled !== false}
 						onSaved={refresh}
+						disabled={status.system?.paused}
 					/>
 					<FrostAlertSettings
 						settings={status.settings}
 						weather={status.weather}
 						onSaved={refresh}
+						disabled={status.system?.paused}
 					/>
 					<VacationCard
 						vacation={status.vacation ?? { active: false }}
 						flow={status.settings.flow_l_per_min}
 						onSaved={refresh}
+						disabled={status.system?.paused}
 					/>
 				</>
 			) : activeView === "history" ? (
